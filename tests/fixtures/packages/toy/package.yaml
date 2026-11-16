@@ -1,0 +1,31 @@
+# A toy package used only to test the tooling. It is not a real problem.
+id: pkg-toy
+version: 0.1.0
+content_hash: null
+candidate_name: tallybook
+language: python
+upstream:
+  url: https://example.invalid/tallybook
+  commit: "0000000000000000000000000000000000000000"
+  licence: MIT
+  licence_file: public/repo/LICENSE
+  licence_file_sha256: 2ad6dd399e09c8c0ede0ccb6cc8f19c9a91c130867c4e2f24f01654095d2d42f
+session:
+  time_limit_minutes: 60
+  tasks: [find_and_fix, add_feature, explain_architecture]
+agent_config: ac-test
+protected_paths: [pytest.ini, pyproject.toml, conftest.py]
+environment:
+  toolchain: python-3.12
+  base_image: "python@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  system_packages: []
+  dependencies:
+    lockfile: public/repo/requirements.lock
+    cache: null
+  build_command: null
+  test_command: "pytest -q"
+  results_format: junit-xml
+  editor_extensions: []
+  resources: {cpu: 1, memory: 1g}
+  network: none
+image_digest: null

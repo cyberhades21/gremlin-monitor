@@ -1,0 +1,5 @@
+date,person,stage,hours,note
+2026-11-16,engineer,flaw_design,0.5,toy fixture
+2026-11-16,engineer,hidden_tests,0.5,toy fixture
+2026-11-16,engineer,validation,0.25,toy fixture
+2026-11-16,engineer,approval,0.25,toy fixture

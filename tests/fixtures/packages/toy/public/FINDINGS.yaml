@@ -1,0 +1,10 @@
+# List what you found, one entry per issue. Every field is needed.
+#
+#   - title: "Short description of the issue"
+#     category: bug            # bug | doc_error | test_error | other
+#     location: "path/to/file.py:42"
+#     evidence: "How you know it is an issue"
+#     status: fixed            # fixed | found_not_fixed
+#     fix_summary: "What you changed"
+#     checked_by: "How you checked the fix"
+findings: []

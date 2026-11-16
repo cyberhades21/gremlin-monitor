@@ -1,0 +1,7 @@
+- id: X-001
+  summary: "add_entry accepts an empty description"
+  location: {path: tallybook/ledger.py, lines: "18-22"}
+  found_by: audit
+  verified_on_upstream: false
+  upstream_mappable: false
+  status: open

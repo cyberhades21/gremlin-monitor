@@ -1,0 +1,8 @@
+--- a/tallybook/limits.py
++++ b/tallybook/limits.py
+@@ -8,4 +8,4 @@
+ 
+     A purchase at or above the limit is rejected.
+     """
+-    return not amount > limit
++    return amount < limit

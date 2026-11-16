@@ -1,0 +1,2 @@
+# Contradiction items whose truth evidence the engineer has checked by hand.
+truth_confirmed: [G-001, G-002, G-003]

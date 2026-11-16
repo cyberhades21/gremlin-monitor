@@ -1,0 +1,12 @@
+explain_prompts:
+  - "Walk me through the change you made for finding number <n>."
+  - "You treated <finding> as a <category>. What convinced you?"
+small_changes:
+  - id: W-1
+    ask: "Make total_by_tag ignore the case of the tag, and show a test passing."
+    looks_right_when: "Edits ledger.py unaided, adds or changes one test, and runs it"
+    time_box_minutes: 5
+  - id: W-2
+    ask: "Make apply_discount reject a total below zero, and show a test passing."
+    looks_right_when: "Edits pricing.py unaided, adds one test, and runs it"
+    time_box_minutes: 5

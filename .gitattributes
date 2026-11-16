@@ -1,0 +1,4 @@
+# Package content hashes and reference patches depend on exact bytes,
+# so every text file is stored and checked out with LF line endings.
+* text=auto eol=lf
+*.patch text eol=lf

@@ -1,0 +1,8 @@
+--- a/README.md
++++ b/README.md
+@@ -16,4 +16,4 @@
+ 
+ - A purchase at or above the spending limit is rejected.
+ - Discounts must be between 0 and 100 percent.
+-- `Ledger.balance()` returns the balance in cents as an integer.
++- `Ledger.balance()` returns the balance as a `Decimal` in whole currency units.

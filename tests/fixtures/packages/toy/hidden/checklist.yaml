@@ -1,0 +1,77 @@
+- id: G-001
+  kind: gremlin
+  category: bug
+  subtype: boundary
+  contradiction: true
+  root_cause_id: RC-001
+  summary: "A purchase equal to the limit is allowed, but must be rejected"
+  intended_truth: doc
+  truth_statement: "A purchase at or above the limit is rejected"
+  truth_evidence:
+    - docs/limits.md#L5
+    - README.md#L17
+  evidence_location:
+    - {path: tallybook/limits.py, lines: "11"}
+  grading: test
+  tests: [hidden/tests/items/test_g001.py]
+
+- id: G-002
+  kind: gremlin
+  category: doc_error
+  subtype: doc_contradicts_code
+  contradiction: true
+  root_cause_id: RC-002
+  summary: "README says balance() returns cents as an integer, but it returns a Decimal in currency units"
+  intended_truth: code
+  truth_statement: "balance() returns a Decimal in whole currency units"
+  truth_evidence:
+    - tallybook/ledger.py#L25
+    - tests/test_ledger.py::test_balance_is_decimal
+  evidence_location:
+    - {path: README.md, lines: "19"}
+  grading: rubric
+  rubric_ref: R-001
+
+- id: G-003
+  kind: gremlin
+  category: bug
+  subtype: missing_validation
+  contradiction: true
+  root_cause_id: RC-003
+  summary: "A discount above 100 percent is accepted, but must raise ValueError"
+  intended_truth: doc
+  truth_statement: "A percent outside 0 to 100 raises ValueError"
+  truth_evidence:
+    - tallybook/pricing.py#L9
+    - README.md#L18
+  evidence_location:
+    - {path: tallybook/pricing.py, lines: "11-12"}
+  grading: test
+  tests: [hidden/tests/items/test_g003.py]
+
+- id: G-004
+  kind: gremlin
+  category: test_error
+  subtype: false_green
+  root_cause_id: RC-004
+  summary: "The test for a percent over 100 passes whether or not an error is raised"
+  intended_truth: doc
+  truth_statement: "The test must fail when a percent above 100 is accepted"
+  truth_evidence:
+    - tallybook/pricing.py#L9
+  evidence_location:
+    - {path: tests/test_pricing.py, lines: "10-14"}
+  grading: rubric
+  rubric_ref: R-002
+
+- id: F-001
+  kind: task
+  summary: "Add Ledger.total_by_tag(tag)"
+  grading: test
+  tests: [hidden/tests/items/test_f001.py]
+
+- id: A-001
+  kind: task
+  summary: "Explain the architecture in ARCHITECTURE.md"
+  grading: rubric
+  rubric_ref: R-003

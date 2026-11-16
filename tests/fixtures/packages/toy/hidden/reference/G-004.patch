@@ -1,0 +1,18 @@
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,4 +1,6 @@
+ from decimal import Decimal
++
++import pytest
+ 
+ from tallybook.pricing import apply_discount
+ 
+@@ -8,7 +10,5 @@
+ 
+ 
+ def test_discount_rejects_percent_over_100():
+-    try:
++    with pytest.raises(ValueError):
+         apply_discount(Decimal("200"), Decimal("150"))
+-    except ValueError:
+-        pass

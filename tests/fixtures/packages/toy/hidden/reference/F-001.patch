@@ -1,0 +1,10 @@
+--- a/tallybook/ledger.py
++++ b/tallybook/ledger.py
+@@ -24,3 +24,7 @@
+     def balance(self) -> Decimal:
+         """Return the sum of all entry amounts as a Decimal in currency units."""
+         return sum((entry.amount for entry in self.entries), Decimal("0"))
++
++    def total_by_tag(self, tag: str) -> Decimal:
++        """Return the sum of amounts for entries carrying `tag`."""
++        return sum((entry.amount for entry in self.entries if tag in entry.tags), Decimal("0"))

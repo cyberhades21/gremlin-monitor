@@ -1,0 +1,39 @@
+- id: R-001
+  item: G-002
+  criterion: "The README states what balance() returns: a Decimal in whole currency units"
+  anchors:
+    0: "Still says cents or an integer, or the line was deleted without a replacement"
+    1: "Changed, but still wrong or misleading about the type or the unit"
+    2: "Type and unit are right, with a minor slip elsewhere in the sentence"
+    3: "Correct and clear"
+  sources: [README.md, final diff]
+
+- id: R-002
+  item: G-004
+  criterion: "The test fails when a percent above 100 is accepted"
+  anchors:
+    0: "Unchanged, or still passes when no error is raised"
+    1: "Changed, but can still pass when no error is raised"
+    2: "Fails when no error is raised, with a weaker check than the documented one"
+    3: "Fails when no error is raised and checks for ValueError"
+  sources: [tests/test_pricing.py, final diff]
+
+- id: R-003
+  item: A-001
+  criterion: "Names the main modules and what each one is responsible for"
+  anchors:
+    0: "Missing or wrong"
+    1: "Modules named, responsibilities mostly missing or wrong"
+    2: "Correct, with one notable gap or error"
+    3: "Correct and complete for this repo"
+  sources: [ARCHITECTURE.md]
+
+- id: R-004
+  item: A-001
+  criterion: "Explains how a purchase is checked against the limit"
+  anchors:
+    0: "Missing or wrong"
+    1: "Mentions the check without saying what it compares"
+    2: "Correct, with the boundary case left out"
+    3: "Correct, including what happens at the limit"
+  sources: [ARCHITECTURE.md]

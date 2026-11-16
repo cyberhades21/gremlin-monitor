@@ -1,0 +1,10 @@
+--- a/tallybook/pricing.py
++++ b/tallybook/pricing.py
+@@ -8,6 +8,6 @@
+ 
+     `percent` must be between 0 and 100 inclusive. Anything else raises ValueError.
+     """
+-    if percent < 0:
++    if percent < 0 or percent > 100:
+         raise ValueError("percent must be between 0 and 100")
+     return total - (total * percent / Decimal("100"))
