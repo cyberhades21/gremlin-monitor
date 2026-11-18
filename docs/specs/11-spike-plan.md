@@ -26,6 +26,8 @@ A spike is a short, throwaway experiment that answers one question. Spike code l
 
 - Claude Code CLI is listed as "needs written agreement" and is not tested unless Anthropic agrees.
 - Roo Code is excluded because its repo is archived.
+- **Desk check done, 2026-11-19** (`docs/spikes/01-agent-desk-check.md`). Hands-on order: OpenCode, then the Agent SDK harness, then Cline. Kilo Code is dropped, because its CLI is a fork of OpenCode with product telemetry on by default and a vendor gateway as the default. A harness we write on the Messages API is added as the last fallback.
+- The gateway (spike 5) is the same for every option, so it can start before this spike's hands-on part.
 
 **Check each option for:**
 1. Custom base URL.
