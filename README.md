@@ -7,7 +7,8 @@ Internal tooling for the assessment pilot. The specs are in [docs/specs/](docs/s
 | Path | Holds |
 |---|---|
 | `docs/specs/` | Specs and decision records |
-| `src/gremlin_assess/` | Operator-side tooling: package checks, grading, validation |
+| `docs/testing.md` | How to run and try everything yourself |
+| `src/gremlin_assess/` | Operator-side tooling: package checks, grading, validation, sessions, reports, Gate 1a analysis |
 | `src/workspace_tools/` | The small tools that ship inside a candidate workspace. Plain names only |
 | `tests/` | Tests, with a toy package under `tests/fixtures/packages/toy/` |
 
@@ -33,6 +34,16 @@ uv run gassess export <package-dir> <dest>     build a candidate workspace
 uv run gassess make-patch <base> <changed>     write a reference patch
 uv run gassess check-findings <file>           check a findings file's format
 uv run gassess match <package-dir> <findings>  match findings to items by location
+```
+
+Running a pilot (see [docs/testing.md](docs/testing.md) for a walk-through):
+
+```
+uv run gassess session new|start|note|snapshot|collect|walkthrough|check <pilot-dir> <S-001> ...
+uv run gassess grade-session <pilot-dir> <S-001> <package-dir> [--image TAG] [--model]
+uv run gassess packet <pilot-dir> <S-001> <package-dir> --reviewer R1 --out <dir> --forbid "Name" ...
+uv run gassess review-check <package-dir> <review-form.yaml>
+uv run gassess analyze <pilot-dir> --packages <dir> [--out gate1a.md]
 ```
 
 Session data from the pilot is personal data. It lives outside this repo and is never committed.

@@ -2,7 +2,7 @@
 #
 #   - title: "Short description of the issue"
 #     category: bug            # bug | doc_error | test_error | other
-#     location: "path/to/file.py:42"
+#     location: "tallybook/limits.py:42"   # a path inside the repo folder, then a line or a range such as 40-44
 #     evidence: "How you know it is an issue"
 #     status: fixed            # fixed | found_not_fixed
 #     fix_summary: "What you changed"

@@ -11,6 +11,11 @@ dependencies = [
 [project.scripts]
 gassess = "gremlin_assess.cli:main"
 
+[project.optional-dependencies]
+model = [
+    "anthropic>=2.10.0",
+]
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

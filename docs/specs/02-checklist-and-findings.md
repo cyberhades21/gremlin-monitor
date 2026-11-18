@@ -86,7 +86,7 @@ findings:
 
 Matching decides whether an item was **identified**. Whether it was **fixed** is decided separately by hidden tests or the rubric (spec 05).
 
-1. **By location.** A finding matches an item when its `location` is in the same file and within 10 lines of an `evidence_location`, and the categories agree. A finding in the right place with a different category, or with no line number, goes to step 2.
+1. **By location.** A finding matches an item when its `location` is in the same file and within 10 lines of an `evidence_location`, and the categories agree. A location is a path inside the repo folder. The template's comment says so. A path that starts with the repo folder's own name is matched too, in case the candidate wrote it relative to the workspace. A finding in the right place with a different category, or with no line number, goes to step 2.
 2. **By the rubric grader.** Findings left unmatched are compared with the item summaries in 3 passes. A match needs a quoted phrase from the finding in every pass.
 3. **By a person.** If the passes disagree, a person decides.
 

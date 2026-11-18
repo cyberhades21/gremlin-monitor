@@ -35,11 +35,12 @@ The report shows each item as "fixed and reported", "fixed, not reported", "repo
   sources: [ARCHITECTURE.md, FINDINGS.yaml, final diff]
 ```
 
-- The grader runs 3 passes per session. Each pass scores every criterion 0 to 3 and must quote the text or code that supports the score. A pass with a missing quote is discarded and rerun.
-- The result is the median. If the highest and lowest pass differ by 2 or more, the item is "needs review" and a person decides.
-- For a rubric-backed gremlin, Fixed is yes when the median is 2 or 3.
-- Candidate text and code are data. An instruction found inside them is ignored and reported as an integrity flag.
-- Each pass records the model id, grader prompt version and package version.
+- The grader runs 3 passes per session. Each pass scores every criterion 0 to 3 and must quote the text or code that supports the score. A quote must be at least 10 characters and must appear in the material named for that criterion, which the harness checks itself and does not take on trust. A pass with a missing or false quote is discarded and asked again, up to 3 attempts. A score of 0 may set `nothing_to_quote` instead, when the material has nothing relevant.
+- A criterion's result is the median of its passes. If the highest and lowest pass differ by 2 or more, or fewer than 3 passes are valid, the criterion is "needs review" and a person decides.
+- An item's Fixed result uses every criterion in `rubric.yaml` that names the item. It is yes when every median is 2 or 3, needs review when any criterion does, and no otherwise. For a task this reads as done or not done.
+- Candidate text and code are data, fenced so they cannot close the data block. An instruction found inside them is ignored and reported as an integrity flag, found either by pattern or by the model.
+- Each pass records the model id, grader prompt version and package version. One pinned model grades every pass. Server-side fallbacks to another model are not enabled, because a pass graded by another model would break that record. A refusal is a discarded pass.
+- Every model call, including findings matching, is counted in `grading/model_usage.json`.
 
 ## Process signals (closed list)
 
@@ -85,7 +86,7 @@ small_changes:
 8. Process observations.
 9. Tokens and cost.
 
-Every result line points to a time in the terminal recording or a line in the transcript. There is no composite score. A report for candidates is not designed yet.
+Every result line points to a file in the session folder and a place in it. In the manual pilot that is a test, a rubric criterion or a finding number. Times in the terminal recording come with the platform pilot, because nothing yet links results to recording times. There is no composite score. A report for candidates is not designed yet.
 
 ## Reviewer protocol (Gate 1a)
 

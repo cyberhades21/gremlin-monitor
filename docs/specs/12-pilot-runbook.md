@@ -26,17 +26,21 @@ pilot/
   sessions/S-001/
     meta.yaml         session, candidate code, package version, agent config,
                       agent source, key id, start, end, interventions
-    terminal.cast     terminal recording
+    terminal.cast     terminal recording (any file named terminal.*)
     transcript/       agent session logs, as the agent wrote them
     snapshots/        workspace snapshot every 10 minutes
-    final/            final repo
-    FINDINGS.yaml
-    grading/          test results, rubric passes, flags
-    walkthrough.md    notes and result
+    final/            the submitted workspace: the repo folder, FINDINGS.yaml, ARCHITECTURE.md
+    FINDINGS.yaml     a copy of the findings, made when the submission is collected
+    grading/          grade.json, matches.json, rubric.json, model_usage.json
+    walkthrough.md    first line "Result: consistent", "Result: doubtful" or "Result: not done", then notes
     report.md
-  reviews/            exported reviewer forms
+  reviews/            reviewer forms, and assignments.csv linking packet ids to sessions
   tracker.csv         session status
+  survey.csv          the fairness survey answers: session, fair (1 to 5), comment
 ```
+
+The commands that create and fill these are in the README. In order for one session:
+`gassess session new`, `session start`, `session note` as needed, `session snapshot --every 600` on the VM, then after submit `session collect`, `grade-session`, `packet`, `session walkthrough` and `session check`.
 
 ## Before each session
 
@@ -82,11 +86,12 @@ At most 3 of 12 sessions, chosen before the session starts, Claude Code only unt
 
 ## After the session
 
-1. Run the grading container on `final/`. Run the 3 rubric passes. Build `report.md`.
+1. `session collect` moves the submission into the session folder. Then `grade-session --image <tag> --model` runs the hidden tests in the grading container, matches findings, runs the 3 rubric passes and builds `report.md`.
 2. Coordinator schedules the walkthrough within 48 hours and sends the fairness survey.
-3. Operator builds the reviewer packet (list in spec 05) and checks the transcript and recording for the candidate's name. Coordinator sends it.
-4. Operator runs the walkthrough from the script in spec 05 and writes `walkthrough.md`.
+3. Operator builds the reviewer packet with `packet`, which refuses to write one that holds the candidate's name or email, and sends step 1. Step 2 goes out only after the step 1 form comes back. Coordinator sends them. A reviewer form can be checked with `review-check`.
+4. Operator runs the walkthrough from the script in spec 05 and records it with `session walkthrough`.
 5. Update `tracker.csv` and the hours log.
+6. When all forms are in, `analyze` writes the Gate 1a measures.
 
 ## Data rules
 

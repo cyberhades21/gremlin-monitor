@@ -42,15 +42,30 @@ def _gap(first: tuple[int, int], second: tuple[int, int]) -> int:
     return 0
 
 
-def _match_one(finding: Finding, gremlins: list[ChecklistItem], extras: list[Extra]) -> Match:
+def _paths(finding: Finding, repo_name: str | None) -> set[str]:
+    """The finding's path as written, and without a leading repo folder name.
+
+    A candidate may write a path relative to the workspace, which starts with
+    the repo folder, instead of one relative to the repo.
+    """
+    paths = {finding.path}
+    if repo_name and finding.path.startswith(repo_name + "/"):
+        paths.add(finding.path[len(repo_name) + 1 :])
+    return paths
+
+
+def _match_one(
+    finding: Finding, gremlins: list[ChecklistItem], extras: list[Extra], repo_name: str | None = None
+) -> Match:
     has_lines = finding.start_line is not None and finding.end_line is not None
+    paths = _paths(finding, repo_name)
 
     if has_lines:
         span = (finding.start_line, finding.end_line)
         candidates = []
         for item in gremlins:
             for location in item.evidence_location:
-                if location.path != finding.path:
+                if location.path not in paths:
                     continue
                 distance = _gap(span, location.line_range())
                 if distance <= MAX_DISTANCE:
@@ -65,11 +80,11 @@ def _match_one(finding: Finding, gremlins: list[ChecklistItem], extras: list[Ext
                 distance=distance,
             )
         for extra in extras:
-            if extra.location.path == finding.path and _gap(span, extra.location.line_range()) <= MAX_DISTANCE:
+            if extra.location.path in paths and _gap(span, extra.location.line_range()) <= MAX_DISTANCE:
                 return Match(finding.index, "extra", extra_id=extra.id)
     else:
         in_file = sorted(
-            {item.id for item in gremlins if any(loc.path == finding.path for loc in item.evidence_location)}
+            {item.id for item in gremlins if any(loc.path in paths for loc in item.evidence_location)}
         )
         if in_file:
             # Without a line we cannot tell which item is meant when a file holds several.
@@ -79,11 +94,15 @@ def _match_one(finding: Finding, gremlins: list[ChecklistItem], extras: list[Ext
 
 
 def match_findings(
-    findings: Iterable[Finding], checklist: Iterable[ChecklistItem], extras: Iterable[Extra]
+    findings: Iterable[Finding],
+    checklist: Iterable[ChecklistItem],
+    extras: Iterable[Extra],
+    repo_name: str | None = None,
 ) -> list[Match]:
+    """Step 1 of matching. `repo_name` lets a path that starts with the repo folder match too."""
     gremlins = [item for item in checklist if item.kind == "gremlin"]
     known_extras = list(extras)
-    return [_match_one(finding, gremlins, known_extras) for finding in findings]
+    return [_match_one(finding, gremlins, known_extras, repo_name) for finding in findings]
 
 
 def identified_items(matches: Iterable[Match]) -> set[str]:

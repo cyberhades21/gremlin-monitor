@@ -27,6 +27,12 @@ def _keep(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
     return info
 
 
+def make_archive(workspace: Path, archive: Path) -> None:
+    """Write a compressed copy of a workspace, without caches."""
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(workspace, arcname="workspace", filter=_keep)
+
+
 def submit(workspace: Path, out_dir: Path) -> tuple[Path | None, list[str]]:
     """Check the findings file and archive the workspace. Returns (archive, problems)."""
     findings_path = workspace / FINDINGS_FILE
@@ -39,8 +45,7 @@ def submit(workspace: Path, out_dir: Path) -> tuple[Path | None, list[str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     archive = out_dir / f"submission-{stamp}.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(workspace, arcname="workspace", filter=_keep)
+    make_archive(workspace, archive)
     (out_dir / MARKER_FILE).write_text(f"{stamp} {archive.name}\n", encoding="utf-8")
     return archive, []
 

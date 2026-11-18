@@ -38,6 +38,19 @@ def test_findings_are_matched_by_location(toy):
     assert identified_items(matches) == {"G-001", "G-002", "G-004"}
 
 
+def test_a_path_written_relative_to_the_workspace_matches_too(toy):
+    findings = [
+        finding(1, "bug", "tallybook/tallybook/limits.py", 11),  # starts with the repo folder name
+        finding(2, "bug", "tallybook/limits.py", 11),  # relative to the repo, as asked
+        finding(3, "bug", "other/tallybook/limits.py", 11),  # a different folder
+    ]
+
+    matches = match_findings(findings, toy.checklist, toy.extras, "tallybook")
+
+    assert [(m.outcome, m.item_id) for m in matches] == [("matched", "G-001"), ("matched", "G-001"), ("unmatched", None)]
+    assert match_findings(findings[:1], toy.checklist, toy.extras)[0].outcome == "unmatched"  # without the repo name
+
+
 def test_matching_is_repeatable(toy):
     findings = [finding(1, "bug", "tallybook/pricing.py", 5, 9), finding(2, "bug", "tallybook/limits.py", 1)]
     first = match_findings(findings, toy.checklist, toy.extras)

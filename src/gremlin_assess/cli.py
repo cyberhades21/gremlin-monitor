@@ -6,8 +6,12 @@ import argparse
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+import yaml
+
+from gremlin_assess.analysis import analyze_pilot
 from gremlin_assess.brief import disclosed_counts, render_counts_table
 from gremlin_assess.container import docker_available
 from gremlin_assess.export import ExportError, export_public
@@ -16,7 +20,22 @@ from gremlin_assess.grading.container_runner import container_runner
 from gremlin_assess.image import ImageError, ensure_image
 from gremlin_assess.matching import match_findings
 from gremlin_assess.package import PackageError, load_package
+from gremlin_assess.packet import PacketError, build_packet
 from gremlin_assess.patches import PatchError, make_patch
+from gremlin_assess.pipeline import grade_session
+from gremlin_assess.report import ReportError
+from gremlin_assess.reviews import ReviewError, load_step1, load_step2
+from gremlin_assess.session import (
+    SessionError,
+    add_intervention,
+    collect,
+    missing_artifacts,
+    new_session,
+    session_path,
+    snapshot,
+    start_session,
+    write_walkthrough,
+)
 from gremlin_assess.validator import validate, write_report
 from workspace_tools.findings_check import check_findings_text
 
@@ -156,10 +175,135 @@ def _cmd_match(args: argparse.Namespace) -> int:
             print(f"  - {problem}")
         return 1
     titles = {finding.index: finding.title for finding in findings}
-    for match in match_findings(findings, package.checklist, package.extras):
+    for match in match_findings(findings, package.checklist, package.extras, package.meta.candidate_name):
         target = match.item_id or match.extra_id or "-"
         note = " (category differs)" if match.category_mismatch else ""
         print(f"{match.finding_index:>3}  {match.outcome:<14} {target:<7} {titles[match.finding_index]}{note}")
+    return 0
+
+
+def _cmd_session(args: argparse.Namespace) -> int:
+    try:
+        if args.action == "new":
+            package = _load(args.package)
+            if package is None:
+                return 1
+            directory = new_session(
+                args.pilot, args.session, package, args.candidate, agent_source=args.agent_source, key_id=args.key_id
+            )
+            print(f"Created {directory}")
+        elif args.action == "start":
+            start_session(args.pilot, args.session)
+            print(f"{args.session} is running")
+        elif args.action == "note":
+            add_intervention(args.pilot, args.session, args.text)
+            print("Noted.")
+        elif args.action == "snapshot":
+            directory = session_path(args.pilot, args.session)
+            while True:
+                print(f"Saved {snapshot(args.workspace, directory)}")
+                if not args.every:
+                    break
+                time.sleep(args.every)
+        elif args.action == "collect":
+            problems = collect(args.pilot, args.session, args.submission)
+            if problems:
+                print("Collected, but the submission has problems:")
+                for problem in problems:
+                    print(f"  - {problem}")
+                return 1
+            print(f"Collected {args.session}")
+        elif args.action == "walkthrough":
+            print(f"Saved {write_walkthrough(args.pilot, args.session, args.result.replace('-', ' '), args.notes)}")
+        elif args.action == "check":
+            missing = missing_artifacts(session_path(args.pilot, args.session), args.stage)
+            for name in missing:
+                print(f"missing: {name}")
+            print("Complete." if not missing else f"{len(missing)} missing for stage '{args.stage}'.")
+            return 1 if missing else 0
+    except SessionError as exc:
+        print(f"Error: {exc}")
+        return 1
+    return 0
+
+
+def _cmd_grade_session(args: argparse.Namespace) -> int:
+    package = _load(args.package)
+    if package is None:
+        return 1
+    runner = None
+    if args.image:
+        resources = package.meta.environment.resources
+        runner = container_runner(args.image, memory=resources.memory, cpus=resources.cpu)
+    client = None
+    if args.model:
+        from gremlin_assess.grading.model_client import AnthropicModelClient
+
+        try:
+            client = AnthropicModelClient()
+        except RuntimeError as exc:
+            print(f"Error: {exc}")
+            return 1
+    expected = None
+    report_path = package.validation_dir / "report.json"
+    if report_path.is_file():
+        expected = json.loads(report_path.read_text(encoding="utf-8")).get("expected_tests") or None
+    try:
+        report = grade_session(
+            args.pilot, args.session, package, runner=runner, python=args.python, client=client, expected_tests=expected
+        )
+    except (SessionError, ReportError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    print(f"Report written to {report}")
+    if client is None:
+        print("No model was used, so rubric items are not graded and open findings need a person.")
+    return 0
+
+
+def _cmd_packet(args: argparse.Namespace) -> int:
+    package = _load(args.package)
+    if package is None:
+        return 1
+    try:
+        packet_id = build_packet(args.pilot, args.session, package, args.reviewer, args.out, args.forbid)
+    except (PacketError, SessionError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    print(f"Packet {packet_id} written under {args.out / packet_id}")
+    print("Send step1 now. Send step2 only after the step 1 form comes back.")
+    return 0
+
+
+def _cmd_review_check(args: argparse.Namespace) -> int:
+    try:
+        data = yaml.safe_load(args.file.read_text(encoding="utf-8")) or {}
+        if "overall" in data:
+            load_step1(args.file)
+            print("Step 1 form is valid.")
+        else:
+            package = _load(args.package)
+            if package is None:
+                return 1
+            load_step2(args.file, package)
+            print("Step 2 form is valid.")
+    except (ReviewError, OSError, yaml.YAMLError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    return 0
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    try:
+        text = analyze_pilot(args.pilot, args.packages)
+    except (SessionError, ReviewError, PackageError, KeyError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    if args.out:
+        args.out.write_bytes(text.encode("utf-8"))
+        print(f"Saved {args.out}")
+    else:
+        print(text, end="")
     return 0
 
 
@@ -211,6 +355,64 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("package", type=Path)
     command.add_argument("findings", type=Path)
     command.set_defaults(run=_cmd_match)
+
+    command = commands.add_parser("session", help="create and manage session folders")
+    actions = command.add_subparsers(dest="action", required=True)
+
+    def session_action(name: str, help_text: str) -> argparse.ArgumentParser:
+        sub = actions.add_parser(name, help=help_text)
+        sub.add_argument("pilot", type=Path, help="the pilot directory, kept outside git")
+        sub.add_argument("session", help="a session id like S-001")
+        return sub
+
+    sub = session_action("new", "create a session folder")
+    sub.add_argument("package", type=Path)
+    sub.add_argument("--candidate", required=True, help="candidate code like C-01")
+    sub.add_argument("--agent-source", default="ours", choices=["ours", "own-claude-code", "own-codex"])
+    sub.add_argument("--key-id", help="id of the API key made for this session")
+    session_action("start", "mark the session as running and record the start time")
+    sub = session_action("note", "record an intervention")
+    sub.add_argument("text")
+    sub = session_action("snapshot", "save a compressed copy of the live workspace")
+    sub.add_argument("workspace", type=Path)
+    sub.add_argument("--every", type=int, help="repeat every N seconds until stopped")
+    sub = session_action("collect", "move a submission into the session folder")
+    sub.add_argument("submission", type=Path, help="the archive from submit, or an unpacked workspace")
+    sub = session_action("walkthrough", "record the walkthrough result")
+    sub.add_argument("--result", required=True, choices=["consistent", "doubtful", "not-done"])
+    sub.add_argument("--notes", default="")
+    sub = session_action("check", "list artifacts still missing for a stage")
+    sub.add_argument("--stage", default="complete", choices=["collected", "graded", "complete"])
+    command.set_defaults(run=_cmd_session)
+
+    command = commands.add_parser("grade-session", help="grade a collected session and write its report")
+    command.add_argument("pilot", type=Path)
+    command.add_argument("session")
+    command.add_argument("package", type=Path)
+    command.add_argument("--image", help="run the hidden tests in this container image")
+    command.add_argument("--python", help=python_help)
+    command.add_argument("--model", action="store_true", help="use the grading model (needs `uv sync --extra model` and ANTHROPIC_API_KEY)")
+    command.set_defaults(run=_cmd_grade_session)
+
+    command = commands.add_parser("packet", help="build an anonymised reviewer packet")
+    command.add_argument("pilot", type=Path)
+    command.add_argument("session")
+    command.add_argument("package", type=Path)
+    command.add_argument("--reviewer", required=True)
+    command.add_argument("--out", type=Path, required=True)
+    command.add_argument("--forbid", nargs="+", required=True, help="strings that identify the candidate: name, email, handles")
+    command.set_defaults(run=_cmd_packet)
+
+    command = commands.add_parser("review-check", help="check a reviewer form")
+    command.add_argument("package", type=Path)
+    command.add_argument("file", type=Path)
+    command.set_defaults(run=_cmd_review_check)
+
+    command = commands.add_parser("analyze", help="compute the Gate 1a measures from a pilot directory")
+    command.add_argument("pilot", type=Path)
+    command.add_argument("--packages", type=Path, required=True, help="a directory holding the package folders")
+    command.add_argument("--out", type=Path)
+    command.set_defaults(run=_cmd_analyze)
 
     args = parser.parse_args(argv)
     return args.run(args)
