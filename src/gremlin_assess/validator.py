@@ -6,7 +6,7 @@ import csv
 import json
 import shutil
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,14 +15,20 @@ import yaml
 
 from gremlin_assess import __version__
 from gremlin_assess.brief import check_brief, disclosed_counts
+from gremlin_assess.container import DockerError, Mount, docker_available, open_permissions, run_container
 from gremlin_assess.export import ExportError, commit_count, export_public
 from gremlin_assess.grading import GradeResult, grade
-from gremlin_assess.grading.rigs import RIGS
+from gremlin_assess.grading.container_runner import container_runner
+from gremlin_assess.grading.junit import JUnitError, parse_junit
+from gremlin_assess.grading.rigs import NO_FLAG_EXPECTED, rig_set
 from gremlin_assess.hashing import content_hash, file_sha256
+from gremlin_assess.image import ImageError, ensure_image, requirement_lines, unpinned_requirements
 from gremlin_assess.leakscan import scan_public
 from gremlin_assess.package import Package, PackageError, load_package, split_test_ref
 from gremlin_assess.patches import PatchError, apply_patches
 from workspace_tools.findings_check import check_findings_text
+
+Grader = Callable[[Path], GradeResult]
 
 CHECKS = {
     "V1": "Structure",
@@ -41,7 +47,7 @@ CHECKS = {
 # Checks that need pieces which do not exist yet. They are reported as not run,
 # never as passed.
 NOT_BUILT_YET = {
-    "V2": "needs the package image, which is built in a later step",
+    "V2": "pass --containers to run it. It needs Docker, and a network when the image is built",
     "V7": "needs the pinned agent and a model key",
     "V8": "needs the pinned agent and a model key",
 }
@@ -249,7 +255,77 @@ def _v4(package: Package, reference: GradeResult) -> list[str]:
     return problems
 
 
-def _v5(package: Package, flawed: GradeResult, work: Path, python: str | None) -> list[str]:
+NETWORK_PROBE = (
+    "import socket, sys\n"
+    "try:\n"
+    "    socket.create_connection(('1.1.1.1', 53), timeout=3)\n"
+    "except OSError:\n"
+    "    sys.exit(0)\n"
+    "sys.exit(7)\n"
+)
+RESULTS_FILE = "junit.xml"
+
+
+def _tail(text: str, lines: int = 8) -> str:
+    return " | ".join(text.strip().splitlines()[-lines:])
+
+
+def _v2(package: Package, tag: str, work: Path) -> list[str]:
+    """Offline build: with the network off, the build and the public tests run."""
+    env = package.meta.environment
+    problems: list[str] = []
+    lock = package.root / env.dependencies.lockfile
+    for line in unpinned_requirements(requirement_lines(lock.read_text(encoding="utf-8"))):
+        problems.append(f"{env.dependencies.lockfile}: '{line}' does not pin an exact version with ==")
+
+    repo = work / "v2-repo"
+    shutil.copytree(package.repo_dir, repo, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+    open_permissions(repo)
+    target = f"/workspace/{package.meta.candidate_name}"
+    options = {
+        "mounts": [Mount(repo, target, read_only=False)],
+        "workdir": target,
+        "memory": env.resources.memory,
+        "cpus": env.resources.cpu,
+    }
+    try:
+        probe = run_container(tag, ["python", "-c", NETWORK_PROBE], timeout=60, **options)
+        if probe.exit_code != 0:
+            problems.append("the container could still reach the network")
+
+        if env.build_command:
+            build = run_container(tag, ["sh", "-c", env.build_command], timeout=600, **options)
+            if build.timed_out:
+                problems.append("the build command did not finish within 600 seconds with the network off")
+            elif build.exit_code != 0:
+                problems.append(
+                    f"the build command failed with the network off (exit {build.exit_code}): {_tail(build.output)}"
+                )
+
+        tests = run_container(tag, ["sh", "-c", env.test_command], timeout=600, **options)
+        if tests.timed_out:
+            problems.append("the test command did not finish within 600 seconds with the network off")
+        elif tests.exit_code not in (0, 1):
+            problems.append(
+                f"the test command ended with exit {tests.exit_code} and did not run to completion: "
+                f"{_tail(tests.output)}"
+            )
+        else:
+            results = repo / RESULTS_FILE
+            if not results.is_file():
+                problems.append(f"the test command wrote no {RESULTS_FILE} in the repo root")
+            else:
+                try:
+                    if not parse_junit(results).cases:
+                        problems.append(f"{RESULTS_FILE} holds no test results")
+                except JUnitError as exc:
+                    problems.append(f"{RESULTS_FILE}: {exc}")
+    except DockerError as exc:
+        problems.append(str(exc))
+    return problems
+
+
+def _v5(package: Package, flawed: GradeResult, work: Path, grader: Grader) -> list[str]:
     problems: list[str] = []
     for item in package.checklist:
         if not package.patch_for(item.id).is_file():
@@ -260,7 +336,7 @@ def _v5(package: Package, flawed: GradeResult, work: Path, python: str | None) -
         except PatchError as exc:
             problems.append(f"{item.id}: {exc}")
             continue
-        result = grade(package, repo, python=python)
+        result = grader(repo)
         if not result.integrity_ok:
             problems.append(f"{item.id}: the grading run with only its patch was not clean: {_describe(result)}")
             continue
@@ -278,7 +354,12 @@ def _v5(package: Package, flawed: GradeResult, work: Path, python: str | None) -
 
 
 def _v6(
-    package: Package, flawed: GradeResult, reference: GradeResult | None, work: Path, python: str | None
+    package: Package,
+    flawed: GradeResult,
+    reference: GradeResult | None,
+    work: Path,
+    grader: Grader,
+    container: bool,
 ) -> list[str]:
     problems: list[str] = []
     if not flawed.integrity_ok:
@@ -289,15 +370,15 @@ def _v6(
         problems.append("the integrity checks do not pass on the reference solution")
 
     test_backed_gremlins = [item.id for item in package.gremlins() if item.grading == "test"]
-    for name, apply_rig in RIGS.items():
+    for name, apply_rig in rig_set(container).items():
         repo = work / f"rig-{name}"
         shutil.copytree(package.repo_dir, repo)
         apply_rig(repo)
-        result = grade(package, repo, python=python)
+        result = grader(repo)
         wrongly_fixed = [item_id for item_id in test_backed_gremlins if result.items[item_id].fixed == "yes"]
         if wrongly_fixed:
             problems.append(f"rig '{name}' made {', '.join(wrongly_fixed)} look fixed")
-        elif not result.flags:
+        elif not result.flags and name not in NO_FLAG_EXPECTED:
             problems.append(f"rig '{name}' raised no flag")
     return problems
 
@@ -398,11 +479,19 @@ def _v12(package: Package) -> list[str]:
 # --- entry point ------------------------------------------------------------
 
 
-def validate(root: Path, *, python: str | None = None, checks: Iterable[str] | None = None) -> ValidationReport:
+def validate(
+    root: Path,
+    *,
+    python: str | None = None,
+    checks: Iterable[str] | None = None,
+    containers: bool = False,
+) -> ValidationReport:
     """Run the validator on the package at `root`.
 
     `python` is the interpreter that has the package's dependencies and pytest.
     `checks` limits the run to some check ids. The rest are reported as not run.
+    `containers` builds the package image and runs V2 and the graded checks in
+    it. Without Docker these report not_run, never a quiet fallback to local runs.
     """
     root = Path(root)
     wanted = set(CHECKS) if checks is None else set(checks)
@@ -430,18 +519,53 @@ def validate(root: Path, *, python: str | None = None, checks: Iterable[str] | N
     with tempfile.TemporaryDirectory(prefix="validate-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
         graded = wanted & {"V3", "V4", "V5", "V6"}
+        needs_image = containers and results["V1"].status == "pass" and bool(wanted & ({"V2"} | graded))
+
+        tag: str | None = None
+        runner = None
+        container_problem: str | None = None  # why container checks cannot run, when they cannot
+        if needs_image:
+            if not docker_available():
+                container_problem = "Docker is not running"
+            else:
+                try:
+                    tag = ensure_image(package, work)
+                    resources = package.meta.environment.resources
+                    runner = container_runner(tag, memory=resources.memory, cpus=resources.cpu)
+                except (ImageError, DockerError) as exc:
+                    container_problem = str(exc)
+
+        if "V2" in wanted:
+            if not containers:
+                skip("V2", NOT_BUILT_YET["V2"])
+            elif results["V1"].status != "pass":
+                skip("V2", "fix V1 first")
+            elif tag is None:
+                if container_problem == "Docker is not running":
+                    skip("V2", container_problem)
+                else:
+                    record("V2", [container_problem or "the image could not be built"])
+            else:
+                record("V2", _v2(package, tag, work))
+
+        def grader(repo: Path) -> GradeResult:
+            return grade(package, repo, python=python, runner=runner)
+
         if graded and results["V1"].status != "pass":
             for check_id in graded:
                 skip(check_id, "fix V1 first")
+        elif graded and containers and runner is None:
+            for check_id in graded:
+                skip(check_id, f"the container run is not available: {container_problem}")
         elif graded:
-            flawed = grade(package, package.repo_dir, python=python)
+            flawed = grader(package.repo_dir)
             if "V3" in wanted:
                 record("V3", _v3(package, flawed))
             reference = None
             if wanted & {"V4", "V6"}:
                 try:
                     reference_repo = _copy_repo(package, work / "reference", [i.id for i in package.checklist])
-                    reference = grade(package, reference_repo, python=python)
+                    reference = grader(reference_repo)
                     reference_problems = _v4(package, reference)
                     if not reference_problems:
                         expected_tests = reference.seen_tests
@@ -450,9 +574,9 @@ def validate(root: Path, *, python: str | None = None, checks: Iterable[str] | N
                 if "V4" in wanted:
                     record("V4", reference_problems)
             if "V5" in wanted:
-                record("V5", _v5(package, flawed, work, python))
+                record("V5", _v5(package, flawed, work, grader))
             if "V6" in wanted:
-                record("V6", _v6(package, flawed, reference, work, python))
+                record("V6", _v6(package, flawed, reference, work, grader, container=runner is not None))
 
         if "V9" in wanted:
             record("V9", _v9(package, acknowledgements))

@@ -81,4 +81,5 @@ Internal words such as "gremlin" never appear in anything a candidate sees.
 
 - 2026-11-16: first draft, from plan revision 2.
 - 2026-11-16: Gate 0a signed off by the engineer.
+- 2026-11-18: container grading and V2 added. Spec 01 gains the `junit.xml` convention, quoted hashes, image and wheel-cache rules. Spec 06 says V2 and the graded checks run in containers and never fall back to a local run. Spec 08 records that a local grading run can be fooled by rewritten hidden tests, so only container runs count. Code written and unit-tested, but the real-Docker tests have not run yet because Docker Desktop was off.
 - 2026-11-16: clarifications found while building the tooling. Spec 02 gains the `contradiction` field, says what `rubric_ref` decides, and says a right-place finding with the wrong category goes to step 2. Spec 01 says the single commit is made at export. Spec 06 tightens V3 and names `acknowledgements.yaml`.

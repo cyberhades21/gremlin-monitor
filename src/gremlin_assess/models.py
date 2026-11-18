@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 ALLOWED_LICENCES = ("MIT", "BSD-2-Clause", "BSD-3-Clause")
 CATEGORIES = ("bug", "doc_error", "test_error")
+
+
+def _hash_must_be_text(value):
+    # YAML reads a hash made only of digits, or digits with one 'e', as a
+    # number, which changes it. Refuse it instead of guessing.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        raise ValueError("write the hash in quotes, because YAML reads some hashes as numbers")
+    return value
+
+
+Sha256 = Annotated[str, BeforeValidator(_hash_must_be_text), Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class _Strict(BaseModel):
@@ -23,7 +34,7 @@ class Upstream(_Strict):
     commit: str
     licence: Literal["MIT", "BSD-2-Clause", "BSD-3-Clause"]
     licence_file: str
-    licence_file_sha256: str
+    licence_file_sha256: Sha256
 
 
 class SessionSpec(_Strict):
@@ -33,7 +44,7 @@ class SessionSpec(_Strict):
 
 class DependencyCache(_Strict):
     path: str
-    sha256: str
+    sha256: Sha256
 
 
 class Dependencies(_Strict):
@@ -49,7 +60,7 @@ class SystemPackage(_Strict):
 class EditorExtension(_Strict):
     id: str
     version: str
-    sha256: str
+    sha256: Sha256
     source: Literal["open-vsx"]
 
 

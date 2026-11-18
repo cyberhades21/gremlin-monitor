@@ -9,7 +9,7 @@ The validator proves a package version is sound before any candidate sees it. A 
 | Id | Check | Passes when |
 |---|---|---|
 | V1 | Structure | Files match specs 01 and 02. Ids are unique. Every item has tests or a rubric reference. Counts in the brief equal counts from the checklist |
-| V2 | Offline build | The image builds from pinned inputs. With the network disabled, the build and public tests run |
+| V2 | Offline build | The image builds from pinned inputs. In a container with the network off, a probe cannot connect out, the build command succeeds, and the test command runs to completion (exit 0 or 1) and writes a readable `junit.xml` with at least one result. Every lockfile entry pins a version |
 | V3 | Flawed state | On `public/repo/`, every hidden test of a test-backed gremlin fails by assertion, not by another error. A task's tests must not all pass. Every guard test passes |
 | V4 | Reference state | With all reference patches applied, every hidden test and guard test passes |
 | V5 | Item isolation | Applying one item's reference patch makes that item's tests pass and changes no other item's results, apart from declared `depends_on` |
@@ -48,6 +48,8 @@ The engineer's sign-offs live in `validation/acknowledgements.yaml`: the contrad
 
 A check that has not run is reported as `not_run`. A version with any such check is not validated.
 
+**Containers.** V2 and every graded check (V3 to V6) run in containers when the validator is asked to. Official validation always is. If Docker is not running, those checks report `not_run`. They never fall back to a local run. A local run exists for development only (see spec 08, T1).
+
 ## When to rerun
 
 | Change | Rerun |
@@ -65,6 +67,6 @@ A check that has not run is reported as `not_run`. A version with any such check
 
 - A package with one planted flaw removed fails V3 and names the item.
 - A package whose reference solution misses one item fails V4 and names the item.
-- A rigged sample repo (for example a config file that forces every test to pass) is caught by V6.
+- A rigged sample repo (for example a config file that forces every test to pass) is caught by V6. In a container V6 also runs a rig that rewrites hidden test files, which must not make any item look fixed.
 - A public repo containing the word "gremlin" fails V11.
 - Running the validator twice on the same version gives the same results for V1 to V6 and V9 to V12.

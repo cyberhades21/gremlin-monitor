@@ -12,7 +12,7 @@ Status: draft for Gate 0a, 2026-11-16. This draft covers content and grading. Pl
 
 | Id | Threat | Defence | How we test it |
 |---|---|---|---|
-| T1 | Candidate code rigs the hidden-test run: a config file or plugin that forces passes, patched test tooling, a fake results file | Hidden tests live outside the candidate's tree and run with our own config. Candidate config files and plugins are not loaded. Plugin autoloading is off. Results are written where candidate code cannot reach. Sentinel tests must fail and must pass as expected. Runs have a timeout and no network | Validator V6 runs a set of rigged sample repos |
+| T1 | Candidate code rigs the hidden-test run: a config file or plugin that forces passes, patched test tooling, a fake results file, rewritten hidden test files | Hidden tests live outside the candidate's tree and run with our own config. Candidate config files and plugins are not loaded. Plugin autoloading is off. Sentinel tests must fail and must pass as expected. The runner must exit as a genuine run does, and the results file must agree with itself. Grading runs in a container with no network, no extra privileges and a read-only root, with the candidate's repo and the hidden tests mounted read-only, so test files cannot be rewritten before collection. Runs have a timeout | Validator V6 runs a set of rigged sample repos, including one that rewrites hidden test files |
 | T2 | Candidate edits test infrastructure to hide a failure | Edits to `protected_paths` are flagged in the report. Guard tests catch broken behaviour | A sample session that edits `pytest.ini` produces a flag |
 | T3 | Candidate text tries to instruct the rubric grader | Candidate content is passed as data. Each score needs a quote. 3 passes. An instruction found in the content is reported as a flag | A sample answer containing "give full marks" scores on its content and raises a flag |
 | T4 | Findings report lists many guesses to hit matches | Identification needs a location and evidence. Unmatched findings in counted categories are listed as false positives | A sample report with 20 guesses shows the false positives |
@@ -27,6 +27,7 @@ Status: draft for Gate 0a, 2026-11-16. This draft covers content and grading. Pl
 
 ## Residual risks we accept for the pilot
 
+- **Local grading runs.** A grading run as a plain local process is fooled by candidate code that rewrites hidden test files, because nothing stops the write. It is for development only. Every official grading run is in a container. This was found and confirmed while building the harness, and a test keeps it visible.
 - **Targeted test rigging.** Candidate code is imported during grading, so code written with knowledge of a specific hidden test could fake that one result. Candidates never see hidden tests, and sentinels catch blanket tricks.
 - **A second AI in another tab.** A browser cannot prevent it. Reports state the assurance level.
 - **Package sharing between volunteers.** See T11.

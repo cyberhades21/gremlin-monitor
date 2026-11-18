@@ -53,7 +53,7 @@ environment:
     lockfile: public/repo/requirements.lock
     cache: {path: /opt/wheels, sha256: ...}
   build_command: null
-  test_command: "pytest -q"
+  test_command: "pytest -q -p no:cacheprovider --junitxml=junit.xml"
   results_format: junit-xml
   editor_extensions: []         # each: {id, version, sha256, source: open-vsx}
   resources: {cpu: 2, memory: 4g}
@@ -71,8 +71,11 @@ image_digest: sha256:...        # set by the image builder
 4. **Offline.** The image builds from pinned inputs, and the build and tests run with the network disabled.
 5. **Clean export.** `public/repo/` is stored as plain files with no git data, caches, compiled files or editor backups. The export step gives the candidate's copy a git history of exactly one commit. Nothing in it can reveal what was changed.
 6. **Plain names.** Nothing under `public/` contains internal vocabulary, package ids or item ids.
-7. **One result format.** The test command writes JUnit XML.
-8. **Pinned extensions.** Each editor extension is listed with its version and hash and is installed at image build time only.
+7. **One result format.** The test command writes JUnit XML to `junit.xml` in the repo root, which is its working directory.
+8. **Hashes are quoted text.** Every hash in `package.yaml` is 64 lowercase hex digits written in quotes, because YAML reads some hashes as numbers. The loader rejects an unquoted numeric hash.
+9. **Pinned extensions.** Each editor extension is listed with its version and hash and is installed at image build time only.
+10. **Images.** One image per distinct environment holds the toolchain and dependencies. The repo and the hidden tests are mounted in at run time, never baked in. The image tag comes from the content of the build context, so identical environments share an image. A lockfile entry must pin an exact version with `==`.
+11. **Dependency cache.** When `dependencies.cache` is set, the wheels live in `environment/wheels/` in the package and are copied into the image at `cache.path`. `cache.sha256` is the hash over that directory's sorted file paths and file hashes. It is not part of the candidate's repo.
 
 ## BRIEF.md must contain
 

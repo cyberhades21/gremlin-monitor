@@ -21,6 +21,14 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def tree_sha256(root: Path) -> str:
+    """SHA-256 over every file's relative path and hash, in sorted order. Hex digits only."""
+    entries = sorted(
+        f"{path.relative_to(root).as_posix()}\0{file_sha256(path)}\n" for path in root.rglob("*") if path.is_file()
+    )
+    return hashlib.sha256("".join(entries).encode("utf-8")).hexdigest()
+
+
 def _meta_digest(path: Path) -> str:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     for key in _SELF_REFERENTIAL_KEYS:

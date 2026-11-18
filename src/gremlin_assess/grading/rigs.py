@@ -70,6 +70,32 @@ atexit.register(_rewrite)
 
 _EARLY_EXIT = "import os\n\nos._exit(0)\n"
 
+# Runs when the first hidden test file imports the candidate's code. It rewrites
+# the test files that have not been collected yet, so each test passes, but
+# leaves any file holding the harness's own check tests alone.
+_REWRITE_HIDDEN_TESTS = '''\
+import glob
+import os
+import re
+
+
+def _rewrite_hidden_tests():
+    for path in glob.glob(os.path.join(os.getcwd(), "**", "test_*.py"), recursive=True):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            if "2 + 2" in source:
+                continue
+            names = re.findall(r"^def (test_\\w+)", source, flags=re.M)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("".join(f"def {name}():\\n    pass\\n\\n\\n" for name in names))
+        except OSError:
+            pass
+
+
+_rewrite_hidden_tests()
+'''
+
 
 def _importable_modules(repo: Path) -> list[Path]:
     """Files that run when hidden tests import the candidate's code."""
@@ -116,6 +142,12 @@ def early_exit_success(repo: Path) -> None:
     _append_to_modules(repo, _EARLY_EXIT)
 
 
+def rewritten_hidden_tests(repo: Path) -> None:
+    """Code that rewrites hidden test files on disk before they are collected."""
+    _append_to_modules(repo, _REWRITE_HIDDEN_TESTS)
+
+
+# Rigs any runner must catch.
 RIGS: dict[str, Callable[[Path], None]] = {
     "forced_pass_config": forced_pass_config,
     "plugin_from_candidate_tree": plugin_from_candidate_tree,
@@ -123,3 +155,16 @@ RIGS: dict[str, Callable[[Path], None]] = {
     "rewritten_results_file": rewritten_results_file,
     "early_exit_success": early_exit_success,
 }
+
+# Rigs only the container runner defends against, because the defence is a
+# read-only mount rather than a check. A local run is fooled by these.
+CONTAINER_RIGS: dict[str, Callable[[Path], None]] = {
+    "rewritten_hidden_tests": rewritten_hidden_tests,
+}
+
+# Rigs that are stopped without leaving a flag, so a missing flag is not a failure.
+NO_FLAG_EXPECTED = frozenset({"rewritten_hidden_tests"})
+
+
+def rig_set(container: bool) -> dict[str, Callable[[Path], None]]:
+    return {**RIGS, **CONTAINER_RIGS} if container else dict(RIGS)

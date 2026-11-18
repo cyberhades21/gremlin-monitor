@@ -17,13 +17,13 @@ agent_config: ac-test
 protected_paths: [pytest.ini, pyproject.toml, conftest.py]
 environment:
   toolchain: python-3.12
-  base_image: "python@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  base_image: "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"  # python:3.12-slim, 2026-11-18
   system_packages: []
   dependencies:
     lockfile: public/repo/requirements.lock
     cache: null
   build_command: null
-  test_command: "pytest -q"
+  test_command: "pytest -q -p no:cacheprovider --junitxml=junit.xml"
   results_format: junit-xml
   editor_extensions: []
   resources: {cpu: 1, memory: 1g}

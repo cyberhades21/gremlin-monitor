@@ -84,6 +84,23 @@ def test_rigged_repo_is_noticed(toy, tmp_path, name, expected_result, run_is_tru
     assert fixed(result)["G-001"] == fixed(result)["G-003"] == expected_result
 
 
+def test_a_local_run_is_fooled_by_rewritten_hidden_tests(toy, tmp_path):
+    """A known gap, kept as a canary. The local runner cannot stop candidate code
+    rewriting hidden test files before they are collected. Only the container
+    runner's read-only mounts do (tests/test_docker_integration.py). If this test
+    starts failing, the local runner was hardened and docs/specs/08 needs updating.
+    """
+    from gremlin_assess.grading.rigs import CONTAINER_RIGS
+
+    repo = tmp_path / "repo"
+    shutil.copytree(toy.repo_dir, repo)
+    CONTAINER_RIGS["rewritten_hidden_tests"](repo)
+
+    result = grade(toy, repo)
+
+    assert result.integrity_ok and fixed(result)["G-001"] == "yes"
+
+
 def test_every_rig_has_a_test():
     assert set(RIGS) == {
         "forced_pass_config",

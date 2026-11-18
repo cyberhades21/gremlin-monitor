@@ -11,9 +11,13 @@ fake a good result. See docs/specs/08, threat T1. Its defences:
 - Two sentinel tests with random names must come out as one pass and one fail.
 - The runner must exit with the code that matches a failing sentinel.
 - The results file must be consistent with itself.
+- In a container (see container_runner) the hidden tests and the candidate's
+  repo are mounted read-only, so candidate code cannot rewrite tests that have
+  not been collected yet.
 
 These catch blanket tricks. Code that imitates specific hidden tests it has
-never seen is the accepted residual risk.
+never seen is the accepted residual risk. The local runner is for development
+only: it cannot stop candidate code rewriting hidden test files on disk.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,15 +52,54 @@ _IGNORE = shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", "*.pyc"
 
 
 @dataclass(frozen=True)
-class _Run:
+class RunOutcome:
     exit_code: int | None
     timed_out: bool
+
+
+# A runner takes the working directory the harness prepared and a timeout in
+# seconds. The directory holds `repo/`, `hidden_tests/` (with pytest.ini and
+# the sentinels) and an empty `out/`. The runner must leave the results file at
+# `out/results.xml`.
+Runner = Callable[[Path, int], RunOutcome]
 
 
 @dataclass(frozen=True)
 class _Sentinels:
     file: str
     expected: dict[str, str]  # test name -> outcome it must have
+
+
+def pytest_command(python: str, tests_dir: str, ini: str, results: str) -> list[str]:
+    return [
+        python,
+        "-I",  # isolated: no PYTHONPATH, no user site, no current directory on the path
+        "-B",
+        "-m", "pytest",
+        "-c", ini,
+        "--rootdir", tests_dir,
+        "--confcutdir", tests_dir,
+        "-q",
+        "--junitxml", results,
+        tests_dir,
+    ]
+
+
+def local_runner(python: str) -> Runner:
+    """Run pytest as a plain process on this machine. For development."""
+
+    def run(work: Path, timeout: int) -> RunOutcome:
+        tests_dir, results = work / "hidden_tests", work / "out" / "results.xml"
+        command = pytest_command(python, str(tests_dir), str(tests_dir / "pytest.ini"), str(results))
+        env = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "PYTHON"))}
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        try:
+            completed = subprocess.run(command, cwd=tests_dir, env=env, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return RunOutcome(exit_code=None, timed_out=True)
+        return RunOutcome(exit_code=completed.returncode, timed_out=False)
+
+    return run
 
 
 def _write_sentinels(tests_dir: Path) -> _Sentinels:
@@ -68,28 +111,6 @@ def _write_sentinels(tests_dir: Path) -> _Sentinels:
     source = f"def {passing}():\n    assert 2 + 2 == 4\n\n\ndef {failing}():\n    assert 2 + 2 == 5\n"
     (directory / f"test_{token}.py").write_text(source, encoding="utf-8")
     return _Sentinels(f"{SENTINEL_DIR}/test_{token}.py", {passing: "passed", failing: "failed"})
-
-
-def _run_pytest(python: str, tests_dir: Path, results: Path, timeout: int) -> _Run:
-    command = [
-        python,
-        "-I",  # isolated: no PYTHONPATH, no user site, no current directory on the path
-        "-B",
-        "-m", "pytest",
-        "-c", str(tests_dir / "pytest.ini"),
-        "--rootdir", str(tests_dir),
-        "--confcutdir", str(tests_dir),
-        "-q",
-        "--junitxml", str(results),
-        str(tests_dir),
-    ]
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "PYTHON"))}
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    try:
-        completed = subprocess.run(command, cwd=tests_dir, env=env, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return _Run(exit_code=None, timed_out=True)
-    return _Run(exit_code=completed.returncode, timed_out=False)
 
 
 def _test_files(tests_dir: Path) -> list[str]:
@@ -119,16 +140,20 @@ def grade(
     final_repo: Path,
     *,
     python: str | None = None,
+    runner: Runner | None = None,
     timeout: int = 300,
     expected_tests: Iterable[str] | None = None,
 ) -> GradeResult:
     """Run hidden tests against `final_repo` and return per-item results.
 
-    `python` is the interpreter that has the package's dependencies and pytest.
+    `runner` decides where pytest runs. The default is a local process using
+    `python`, which needs the package's dependencies and pytest. Pass a
+    container runner for a real grading run.
+
     `expected_tests` is the list recorded from the trusted reference run. When
     given, results that are missing or unexpected count against integrity.
     """
-    python = python or sys.executable
+    runner = runner or local_runner(python or sys.executable)
     flags: list[Flag] = []
     integrity_ok = True
 
@@ -142,7 +167,7 @@ def grade(
         sentinels = _write_sentinels(tests_dir)
         known_files = _test_files(tests_dir)
 
-        run = _run_pytest(python, tests_dir, results, timeout)
+        run = runner(work, timeout)
 
         cases: tuple[Case, ...] = ()
         if run.timed_out:

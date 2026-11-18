@@ -26,3 +26,4 @@ testpaths = ["tests"]
 # The fixture packages contain their own test files. They are run by the
 # grading harness, never collected by this project's test run.
 norecursedirs = ["fixtures", ".venv"]
+markers = ["docker: runs real containers and needs Docker running"]

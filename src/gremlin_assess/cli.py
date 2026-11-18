@@ -5,11 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 from gremlin_assess.brief import disclosed_counts, render_counts_table
+from gremlin_assess.container import docker_available
 from gremlin_assess.export import ExportError, export_public
 from gremlin_assess.grading import grade
+from gremlin_assess.grading.container_runner import container_runner
+from gremlin_assess.image import ImageError, ensure_image
 from gremlin_assess.matching import match_findings
 from gremlin_assess.package import PackageError, load_package
 from gremlin_assess.patches import PatchError, make_patch
@@ -27,8 +31,24 @@ def _load(path: Path):
         return None
 
 
+def _cmd_build_image(args: argparse.Namespace) -> int:
+    package = _load(args.package)
+    if package is None:
+        return 1
+    if not docker_available():
+        print("Docker is not running. Start Docker Desktop and try again.")
+        return 1
+    with tempfile.TemporaryDirectory(prefix="image-", ignore_cleanup_errors=True) as work:
+        try:
+            print(ensure_image(package, Path(work)))
+        except ImageError as exc:
+            print(f"The image could not be built: {exc}")
+            return 1
+    return 0
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
-    report = validate(args.package, python=args.python, checks=args.only)
+    report = validate(args.package, python=args.python, checks=args.only, containers=args.containers)
     for check in report.checks:
         print(f"{check.id:<4} {check.name:<22} {check.status}")
         for problem in check.problems:
@@ -58,7 +78,11 @@ def _cmd_grade(args: argparse.Namespace) -> int:
     if report_path.is_file():
         expected = json.loads(report_path.read_text(encoding="utf-8")).get("expected_tests") or None
 
-    result = grade(package, args.repo, python=args.python, expected_tests=expected)
+    runner = None
+    if args.image:
+        resources = package.meta.environment.resources
+        runner = container_runner(args.image, memory=resources.memory, cpus=resources.cpu)
+    result = grade(package, args.repo, python=args.python, runner=runner, expected_tests=expected)
     for item_id, item in sorted(result.items.items()):
         print(f"{item_id:<7} {item.fixed}")
     for guard in result.regressions:
@@ -149,12 +173,18 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--python", help=python_help)
     command.add_argument("--only", nargs="+", metavar="CHECK", help="run only these checks, for example V1 V3")
     command.add_argument("--write", action="store_true", help="save validation/report.json")
+    command.add_argument("--containers", action="store_true", help="run V2 and the graded checks in Docker")
     command.set_defaults(run=_cmd_validate)
+
+    command = commands.add_parser("build-image", help="build the container image a package asks for")
+    command.add_argument("package", type=Path)
+    command.set_defaults(run=_cmd_build_image)
 
     command = commands.add_parser("grade", help="run hidden tests against a final repo")
     command.add_argument("package", type=Path)
     command.add_argument("repo", type=Path)
     command.add_argument("--python", help=python_help)
+    command.add_argument("--image", help="run the tests in this container image (see build-image)")
     command.add_argument("--out", type=Path, help="save the results as JSON")
     command.set_defaults(run=_cmd_grade)
 
