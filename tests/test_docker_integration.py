@@ -10,12 +10,14 @@ import subprocess
 import pytest
 
 from conftest import TOY
+from gremlin_assess.agentchecks import grade_agent_alone, prepare_agent_alone
 from gremlin_assess.container import Mount, docker_available, run_container
 from gremlin_assess.grading import grade
 from gremlin_assess.grading.container_runner import container_runner
 from gremlin_assess.grading.rigs import CONTAINER_RIGS, RIGS
 from gremlin_assess.image import ensure_image
 from gremlin_assess.package import load_package
+from gremlin_assess.patches import apply_patches
 from gremlin_assess.validator import validate
 
 pytestmark = pytest.mark.docker
@@ -80,6 +82,20 @@ def test_no_rig_fools_the_container_runner(toy, runner, tmp_path, name):
     result = grade(toy, repo, runner=runner)
 
     assert "yes" not in fixed(result).values()
+
+
+def test_an_agent_alone_run_is_graded_in_the_container(toy, runner, tmp_path):
+    # The run's repo is a git checkout, like a candidate's, and goes into the container read-only.
+    dest = prepare_agent_alone(toy, tmp_path / "runs", runs=1)
+    run = dest / "run-1"
+    apply_patches(run / "workspace" / "tallybook", [toy.patch_for("G-001")])
+    (run / "run.yaml").write_text("agent_config: ac-test\nended_by: agent_stopped\n", encoding="utf-8")
+
+    table = grade_agent_alone(toy, dest, mode="container", runner=runner)
+
+    entry = table["runs"][0]
+    assert entry["problems"] == [] and entry["integrity_ok"]
+    assert (entry["items"]["G-001"]["fixed"], entry["items"]["G-003"]["fixed"]) == ("yes", "no")
 
 
 def test_the_validator_passes_v2_and_the_graded_checks_in_containers(image):

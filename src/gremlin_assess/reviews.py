@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, model_validator
 
+from gremlin_assess.models import plain_yes_no
 from gremlin_assess.package import Package
 
 PROCESS_IDS = ("P1", "P2", "P3", "P4")
@@ -39,19 +40,9 @@ class Step1(_Strict):
     reasons: str = Field(min_length=20)
 
 
-def _plain_yes_no(value):
-    # YAML reads an unquoted yes or no as true or false. Reviewers will type
-    # them unquoted, so accept that instead of rejecting a correct answer.
-    if value is True:
-        return "yes"
-    if value is False:
-        return "no"
-    return value
-
-
 class ItemVerdict(_Strict):
     id: str
-    verdict: Annotated[Literal["yes", "partly", "no"], BeforeValidator(_plain_yes_no)]
+    verdict: Annotated[Literal["yes", "partly", "no"], BeforeValidator(plain_yes_no)]
 
 
 class RubricScore(_Strict):

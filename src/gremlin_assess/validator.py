@@ -11,9 +11,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-
 from gremlin_assess import __version__
+from gremlin_assess.agentchecks import Evaluation, evaluate_agent_alone, evaluate_audit
 from gremlin_assess.brief import check_brief, disclosed_counts
 from gremlin_assess.container import DockerError, Mount, docker_available, open_permissions, run_container
 from gremlin_assess.export import ExportError, commit_count, export_public
@@ -24,8 +23,10 @@ from gremlin_assess.grading.rigs import NO_FLAG_EXPECTED, rig_set
 from gremlin_assess.hashing import content_hash, file_sha256
 from gremlin_assess.image import ImageError, ensure_image, requirement_lines, unpinned_requirements
 from gremlin_assess.leakscan import scan_public
-from gremlin_assess.package import Package, PackageError, load_package, split_test_ref
-from gremlin_assess.patches import PatchError, apply_patches
+from gremlin_assess.models import Acknowledgements
+from gremlin_assess.package import Package, PackageError, load_acknowledgements, load_package, split_test_ref
+from gremlin_assess.patches import PatchError
+from gremlin_assess.reference import all_item_ids, copy_repo, patch_order
 from workspace_tools.findings_check import check_findings_text
 
 Grader = Callable[[Path], GradeResult]
@@ -44,12 +45,10 @@ CHECKS = {
     "V11": "Leak scan",
     "V12": "Hours log",
 }
-# Checks that need pieces which do not exist yet. They are reported as not run,
-# never as passed.
-NOT_BUILT_YET = {
+# Why a check that was not selected, or cannot run without Docker, did not run.
+# It is reported as not run, never as passed.
+NOT_RUN_REASON = {
     "V2": "pass --containers to run it. It needs Docker, and a network when the image is built",
-    "V7": "needs the pinned agent and a model key",
-    "V8": "needs the pinned agent and a model key",
 }
 STANDARD_NOTICE = "This copy has been modified from the original work."
 HOUR_STAGES = ("flaw_design", "hidden_tests", "validation", "approval")
@@ -58,11 +57,21 @@ ASSERTION_PREFIXES = ("assert", "AssertionError", "Failed")
 
 
 @dataclass
+class Warn:
+    """A finding that does not fail a check, but the engineer must accept with a reason."""
+
+    id: str
+    text: str
+    accepted: str | None = None  # the engineer's reason, once accepted in acknowledgements.yaml
+
+
+@dataclass
 class CheckResult:
     id: str
     name: str
     status: str  # pass | fail | not_run
     problems: list[str] = field(default_factory=list)
+    warnings: list[Warn] = field(default_factory=list)
 
 
 @dataclass
@@ -73,11 +82,17 @@ class ValidationReport:
     agent_config: str | None
     checks: list[CheckResult]
     expected_tests: list[str] = field(default_factory=list)
+    agent_alone: dict | None = None  # the V7 table, when the runs are recorded and current
+    audit: dict | None = None  # the V8 table, likewise
+
+    @property
+    def unaccepted_warnings(self) -> list[Warn]:
+        return [warning for check in self.checks for warning in check.warnings if not warning.accepted]
 
     @property
     def validated(self) -> bool:
-        """True only when every check ran and passed."""
-        return all(check.status == "pass" for check in self.checks)
+        """True only when every check ran and passed and every warning is accepted with a reason."""
+        return all(check.status == "pass" for check in self.checks) and not self.unaccepted_warnings
 
     def check(self, check_id: str) -> CheckResult:
         return next(check for check in self.checks if check.id == check_id)
@@ -90,6 +105,8 @@ class ValidationReport:
             "agent_config": self.agent_config,
             "checks": [asdict(check) for check in self.checks],
             "expected_tests": self.expected_tests,
+            "agent_alone": self.agent_alone,
+            "audit": self.audit,
             "validated": self.validated,
         }
 
@@ -105,40 +122,6 @@ def write_report(report: ValidationReport, package_root: Path) -> Path:
 
 
 # --- helpers ----------------------------------------------------------------
-
-
-def _load_acknowledgements(package: Package) -> dict:
-    path = package.validation_dir / "acknowledgements.yaml"
-    if not path.is_file():
-        return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
-
-
-def _patch_order(package: Package, item_ids: Iterable[str]) -> list[str]:
-    """Item ids with every dependency placed before the item that needs it."""
-    ordered: list[str] = []
-
-    def visit(item_id: str, trail: tuple[str, ...]) -> None:
-        if item_id in ordered:
-            return
-        if item_id in trail:
-            raise PatchError(f"{item_id}: depends_on forms a loop")
-        for dependency in package.item(item_id).depends_on:
-            visit(dependency, (*trail, item_id))
-        ordered.append(item_id)
-
-    for item_id in item_ids:
-        visit(item_id, ())
-    return ordered
-
-
-def _copy_repo(package: Package, dest: Path, item_ids: Iterable[str]) -> Path:
-    """Copy the flawed repo to `dest` and apply the reference patches of `item_ids`."""
-    shutil.copytree(package.repo_dir, dest, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
-    patches = [package.patch_for(i) for i in _patch_order(package, item_ids) if package.patch_for(i).is_file()]
-    apply_patches(dest, patches)
-    return dest
 
 
 def _describe(result: GradeResult) -> str:
@@ -331,8 +314,8 @@ def _v5(package: Package, flawed: GradeResult, work: Path, grader: Grader) -> li
         if not package.patch_for(item.id).is_file():
             continue
         try:
-            applied = _patch_order(package, [item.id])
-            repo = _copy_repo(package, work / f"only-{item.id}", [item.id])
+            applied = patch_order(package, [item.id])
+            repo = copy_repo(package, work / f"only-{item.id}", [item.id])
         except PatchError as exc:
             problems.append(f"{item.id}: {exc}")
             continue
@@ -397,9 +380,9 @@ def _evidence_exists(repo: Path, entry: str) -> bool:
     return line.isdigit() and 1 <= int(line) <= len(path.read_text(encoding="utf-8", errors="ignore").split("\n"))
 
 
-def _v9(package: Package, acknowledgements: dict) -> list[str]:
+def _v9(package: Package, acknowledgements: Acknowledgements) -> list[str]:
     problems: list[str] = []
-    confirmed = set(acknowledgements.get("truth_confirmed") or [])
+    confirmed = set(acknowledgements.truth_confirmed)
     for item in package.gremlins():
         for entry in item.truth_evidence:
             if not _evidence_exists(package.repo_dir, entry):
@@ -513,8 +496,13 @@ def validate(
         return ValidationReport(root.name, None, None, None, [results[c] for c in CHECKS])
 
     expected_tests: list[str] = []
-    acknowledgements = _load_acknowledgements(package)
-    record("V1", _v1(package))
+    acknowledgements, acknowledgement_problems = load_acknowledgements(root)
+    record("V1", _v1(package) + acknowledgement_problems)
+
+    def evaluated(check_id: str, evaluation: Evaluation) -> None:
+        reasons = {warning.id: warning.reason for warning in acknowledgements.accepted_warnings}
+        warnings = [Warn(warning_id, text, reasons.get(warning_id)) for warning_id, text in evaluation.warnings]
+        results[check_id] = CheckResult(check_id, CHECKS[check_id], evaluation.status, evaluation.problems, warnings)
 
     with tempfile.TemporaryDirectory(prefix="validate-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
@@ -537,7 +525,7 @@ def validate(
 
         if "V2" in wanted:
             if not containers:
-                skip("V2", NOT_BUILT_YET["V2"])
+                skip("V2", NOT_RUN_REASON["V2"])
             elif results["V1"].status != "pass":
                 skip("V2", "fix V1 first")
             elif tag is None:
@@ -564,7 +552,7 @@ def validate(
             reference = None
             if wanted & {"V4", "V6"}:
                 try:
-                    reference_repo = _copy_repo(package, work / "reference", [i.id for i in package.checklist])
+                    reference_repo = copy_repo(package, work / "reference", all_item_ids(package))
                     reference = grader(reference_repo)
                     reference_problems = _v4(package, reference)
                     if not reference_problems:
@@ -578,6 +566,17 @@ def validate(
             if "V6" in wanted:
                 record("V6", _v6(package, flawed, reference, work, grader, container=runner is not None))
 
+        # V7 and V8 read the runs the operator recorded. They never start an agent.
+        agent_alone = audit = None
+        if "V7" in wanted:
+            evaluation = evaluate_agent_alone(package, acknowledgements)
+            evaluated("V7", evaluation)
+            agent_alone = evaluation.table
+        if "V8" in wanted:
+            evaluation = evaluate_audit(package, acknowledgements)
+            evaluated("V8", evaluation)
+            audit = evaluation.table
+
         if "V9" in wanted:
             record("V9", _v9(package, acknowledgements))
         if "V10" in wanted:
@@ -589,7 +588,7 @@ def validate(
 
     for check_id in CHECKS:
         if check_id not in results:
-            skip(check_id, NOT_BUILT_YET.get(check_id, "not selected for this run"))
+            skip(check_id, NOT_RUN_REASON.get(check_id, "not selected for this run"))
 
     return ValidationReport(
         package_id=package.meta.id,
@@ -598,4 +597,6 @@ def validate(
         agent_config=package.meta.agent_config,
         checks=[results[check_id] for check_id in CHECKS],
         expected_tests=expected_tests,
+        agent_alone=agent_alone,
+        audit=audit,
     )

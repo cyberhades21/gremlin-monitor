@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from gremlin_assess.package import Package
+from gremlin_assess.reference import all_item_ids, copy_repo
 
 _IGNORE = shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", "*.pyc")
 
@@ -47,15 +48,22 @@ def commit_count(repo: Path) -> int:
     return int(_git(repo, "rev-list", "--count", "HEAD"))
 
 
-def export_public(package: Package, dest: Path) -> Path:
-    """Create the workspace at `dest` and return the path of the repo inside it."""
+def export_public(package: Package, dest: Path, *, reference: bool = False, brief: bool = True) -> Path:
+    """Create the workspace at `dest` and return the path of the repo inside it.
+
+    `reference` builds it from the reference state instead of the flawed repo,
+    for the unlisted-flaw audit. `brief` leaves BRIEF.md out when it is False.
+    """
     if dest.exists() and any(dest.iterdir()):
         raise ExportError(f"{dest} already exists and is not empty")
     dest.mkdir(parents=True, exist_ok=True)
 
     repo = dest / package.meta.candidate_name
-    shutil.copytree(package.repo_dir, repo, ignore=_IGNORE)
-    for name in ("BRIEF.md", "FINDINGS.yaml"):
+    if reference:
+        copy_repo(package, repo, all_item_ids(package))
+    else:
+        shutil.copytree(package.repo_dir, repo, ignore=_IGNORE)
+    for name in ("BRIEF.md", "FINDINGS.yaml") if brief else ("FINDINGS.yaml",):
         shutil.copy2(package.public_dir / name, dest / name)
 
     # An empty template stops hooks from the machine's git setup being copied in.

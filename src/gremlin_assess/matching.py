@@ -33,7 +33,7 @@ class Match:
     distance: int | None = None
 
 
-def _gap(first: tuple[int, int], second: tuple[int, int]) -> int:
+def gap(first: tuple[int, int], second: tuple[int, int]) -> int:
     """Lines between two ranges. Zero when they overlap."""
     if first[1] < second[0]:
         return second[0] - first[1]
@@ -67,7 +67,7 @@ def _match_one(
             for location in item.evidence_location:
                 if location.path not in paths:
                     continue
-                distance = _gap(span, location.line_range())
+                distance = gap(span, location.line_range())
                 if distance <= MAX_DISTANCE:
                     candidates.append((distance, item.category != finding.category, item.id))
         if candidates:
@@ -80,7 +80,7 @@ def _match_one(
                 distance=distance,
             )
         for extra in extras:
-            if extra.location.path in paths and _gap(span, extra.location.line_range()) <= MAX_DISTANCE:
+            if extra.location.path in paths and gap(span, extra.location.line_range()) <= MAX_DISTANCE:
                 return Match(finding.index, "extra", extra_id=extra.id)
     else:
         in_file = sorted(

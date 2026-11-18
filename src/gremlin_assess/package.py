@@ -9,7 +9,14 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from gremlin_assess.models import ChecklistItem, Extra, PackageMeta, RubricCriterion, Walkthrough
+from gremlin_assess.models import (
+    Acknowledgements,
+    ChecklistItem,
+    Extra,
+    PackageMeta,
+    RubricCriterion,
+    Walkthrough,
+)
 
 TESTS_PREFIX = "hidden/tests/"
 
@@ -136,6 +143,14 @@ def _load_list(path: Path, model: type[M], label: str, problems: list[str], requ
         except ValidationError as exc:
             problems.extend(_explain(entry_label, exc))
     return tuple(loaded)
+
+
+def load_acknowledgements(root: Path) -> tuple[Acknowledgements, list[str]]:
+    """Read the engineer's sign-offs. A missing or empty file means none. Problems are returned, not raised."""
+    problems: list[str] = []
+    path = Path(root) / "validation" / "acknowledgements.yaml"
+    loaded = _load_one(path, Acknowledgements, "acknowledgements.yaml", problems, required=False)
+    return loaded or Acknowledgements(), problems
 
 
 def load_package(root: Path) -> Package:

@@ -42,7 +42,12 @@ def test_toy_passes_every_check_that_exists(toy_report):
 
 def test_a_package_is_not_validated_while_checks_are_missing(toy_report):
     assert not toy_report.validated
-    assert toy_report.check("V7").problems == ["needs the pinned agent and a model key"]
+    assert toy_report.check("V7").problems == [
+        "no agent-alone runs are recorded yet (see docs/specs/12, 'Validating a package')"
+    ]
+    assert toy_report.check("V8").problems == [
+        "no audit is recorded yet (see docs/specs/12, 'Validating a package')"
+    ]
 
 
 def test_two_runs_give_the_same_results(toy_report):
@@ -183,7 +188,14 @@ def test_the_report_is_written_as_json(toy_copy):
 
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["package"]["id"] == "pkg-toy" and saved["validated"] is False
-    assert saved["generated_at"] and saved["checks"][0] == {"id": "V1", "name": "Structure", "status": "pass", "problems": []}
+    assert saved["generated_at"] and saved["checks"][0] == {
+        "id": "V1",
+        "name": "Structure",
+        "status": "pass",
+        "problems": [],
+        "warnings": [],
+    }
+    assert saved["agent_alone"] is None and saved["audit"] is None
 
 
 def test_command_line(capsys):

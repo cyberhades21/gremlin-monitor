@@ -23,7 +23,6 @@ Status: draft for Gate 0a, 2026-11-16.
   tests: [hidden/tests/items/test_g001.py]
   rubric_ref: null
   depends_on: []
-  agent_alone: null             # set by the validator
 ```
 
 | Field | Rule |
@@ -36,7 +35,8 @@ Status: draft for Gate 0a, 2026-11-16.
 | `evidence_location` | Where the flaw sits in the flawed repo. Used to match findings |
 | `grading` | Every item has either `tests` or a `rubric_ref`. The `rubric_ref` names the criterion that decides Fixed |
 | `depends_on` | Items that must be fixed first. Empty where possible |
-| `agent_alone` | How often the agent alone fixed the item, was misled by it, or flagged it, out of N runs |
+
+How often the agent alone fixed an item, was possibly misled by it, or flagged it without fixing it is not stored in the checklist. The checklist is part of the content hash, so a result written into it would change the version it describes. It is recorded in `validation/agent_alone.json` and copied into `validation/report.json` (spec 06).
 
 **Sizing guide:** 6 to 10 scored gremlins per package, about 3 of them contradictions.
 

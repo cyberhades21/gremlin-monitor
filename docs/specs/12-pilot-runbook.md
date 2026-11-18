@@ -42,6 +42,24 @@ pilot/
 The commands that create and fill these are in the README. In order for one session:
 `gassess session new`, `session start`, `session note` as needed, `session snapshot --every 600` on the VM, then after submit `session collect`, `grade-session`, `packet`, `session walkthrough` and `session check`.
 
+## Validating a package
+
+Before any candidate sees a package version. The operator does this on the pilot VM with Docker running. The run folders live outside the package and outside git. Do the audit first, then the agent-alone runs, because a change from the audit makes the agent-alone runs stale (spec 06, "When to rerun").
+
+1. `gassess build-image <package>`, then `gassess validate <package> --containers --write`. V1 to V6 and V9 to V12 must pass. The report records the tests seen in the reference run.
+2. **Unlisted-flaw audit (V8).**
+   - `gassess audit prepare <package> <audit-dir>` makes three workspaces of the reference state.
+   - In each `run-N/workspace`, start the pinned agent with its pinned config and give it exactly the prompt in `PROMPT.txt`. Let it stop or reach the session limits.
+   - Fill in `run-N/run.yaml`: how the run ended, the model the agent reported, tokens and cost. Copy the agent's own logs into `run-N/transcript/`.
+   - `gassess audit collect <package> <audit-dir>` writes `validation/audit.json` and lists each report.
+   - Triage every report. Add it to `hidden/extras.yaml`, or reject it with a reason under `audit_triage` in `validation/acknowledgements.yaml`. If it is a real flaw you want to fix in the base or list on the checklist, change the package and run the audit again, because the reference state has changed.
+3. **Agent alone (V7).**
+   - `gassess agent-alone prepare <package> <runs-dir>` makes five candidate workspaces.
+   - In each `run-N/workspace`, start the pinned agent with its pinned config and give it exactly the prompt in `PROMPT.txt`. Send no follow-up. Fill in `run-N/run.yaml` and copy the logs, as above.
+   - `gassess agent-alone grade <package> <runs-dir> --image <tag> --model` writes `validation/agent_alone.json` and says what V7 would be. If gremlins could not be graded, grade again with `--model`, or settle each one in `acknowledgements.yaml`.
+4. `gassess validate <package> --containers --write`. Accept each warning with a reason in `acknowledgements.yaml`, then run it again. "Validated." means the version can be used.
+5. Record the hours in `validation/hours.csv`.
+
 ## Before each session
 
 Two days ahead:
@@ -114,7 +132,7 @@ For the coordinator to draft and the engineer to review:
 
 - [ ] Pilot VM reachable by SSH keys only, with a firewall.
 - [ ] Pilot workspace created with a spend limit.
-- [ ] Package 1 validated (spec 06).
+- [ ] Package 1 validated (spec 06), following "Validating a package" above.
 - [ ] Full dry run by the operator: launch, work the problem, submit, grade, build a reviewer packet, run a mock walkthrough.
 - [ ] Consent form, data note, survey and reviewer form approved.
 - [ ] Reviewer assignment table filled in.

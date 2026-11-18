@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from workspace_tools.findings_check import parse_location
+
 ALLOWED_LICENCES = ("MIT", "BSD-2-Clause", "BSD-3-Clause")
 CATEGORIES = ("bug", "doc_error", "test_error")
 
@@ -124,7 +126,6 @@ class ChecklistItem(_Strict):
     tests: list[str] = []
     rubric_ref: str | None = None
     depends_on: list[str] = []
-    agent_alone: dict | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "ChecklistItem":
@@ -194,3 +195,60 @@ class SmallChange(_Strict):
 class Walkthrough(_Strict):
     explain_prompts: list[str] = Field(min_length=2)
     small_changes: list[SmallChange] = Field(min_length=1)
+
+
+# --- validation/acknowledgements.yaml ---------------------------------------
+# The engineer's sign-offs. Spec 06 says what each section is for.
+
+
+def plain_yes_no(value):
+    # YAML reads an unquoted yes or no as true or false. People will type them
+    # unquoted, so accept that instead of rejecting a correct answer.
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return value
+
+
+class AcceptedWarning(_Strict):
+    id: str
+    reason: str = Field(min_length=10)
+
+
+class SettledResult(_Strict):
+    """The engineer's decision on an agent-alone result the tools could not settle."""
+
+    run: str = Field(pattern=r"^run-\d+$")
+    item: str
+    fixed: Annotated[Literal["yes", "no"], BeforeValidator(plain_yes_no)]
+    reason: str = Field(min_length=10)
+
+
+class TriageEntry(_Strict):
+    """What the engineer decided about a report from the unlisted-flaw audit.
+
+    Fixing a report in the base, or adding it to the checklist, changes the
+    reference state. The audit then has to be run again, and the report is
+    gone, so those two outcomes are never recorded here.
+    """
+
+    location: str
+    decision: Literal["extra", "rejected"]
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _check(self) -> "TriageEntry":
+        parsed = parse_location(self.location)
+        if parsed is None or parsed[1] is None:
+            raise ValueError("location must look like path/to/file.py:42")
+        if self.decision == "rejected" and len(self.note.strip()) < 10:
+            raise ValueError("a rejected report needs a note saying why it is not a real issue")
+        return self
+
+
+class Acknowledgements(_Strict):
+    truth_confirmed: list[str] = []
+    accepted_warnings: list[AcceptedWarning] = []
+    agent_alone_settled: list[SettledResult] = []
+    audit_triage: list[TriageEntry] = []

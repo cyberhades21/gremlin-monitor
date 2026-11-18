@@ -9,7 +9,7 @@ uv sync
 uv run pytest -m "not docker"
 ```
 
-Expect 152 passed and 11 deselected, with no failures. These cover the package checks, the grading harness (it runs real hidden tests in a local process), the validator, matching, the rubric grader with a scripted fake model, sessions, packets, reviewer forms, the report and the Gate 1a arithmetic.
+Expect 180 passed and 12 deselected, with no failures. It takes about two minutes. These cover the package checks, the grading harness (it runs real hidden tests in a local process), the validator including the agent-alone and audit checks (V7 and V8) with a pretend agent, matching, the rubric grader with a scripted fake model, sessions, packets, reviewer forms, the report and the Gate 1a arithmetic.
 
 ## 2. Docker tests (first run takes a few minutes)
 
@@ -20,7 +20,7 @@ Expect 152 passed and 11 deselected, with no failures. These cover the package c
    ```
    The first run pulls `python:3.12-slim` and builds the toy image, so it needs the network. Later runs reuse both.
 
-Expect 11 passed. What each one proves:
+Expect 12 passed. What each one proves:
 
 | Test | Proves |
 |---|---|
@@ -29,6 +29,7 @@ Expect 11 passed. What each one proves:
 | `test_a_hung_container_is_killed` | A timed-out container is removed, not left running |
 | `test_container_grading_matches_local_grading` | Grading in a container gives the same results as locally |
 | `test_no_rig_fools_the_container_runner` (6 cases) | None of the six fake-pass tricks, including rewriting hidden test files, make a flaw look fixed |
+| `test_an_agent_alone_run_is_graded_in_the_container` | A run folder made by `agent-alone prepare`, which is a git checkout, is graded correctly in a container |
 | `test_the_validator_passes_v2_and_the_graded_checks_in_containers` | The whole validator passes in containers |
 
 If something fails, send me the failing test's output. Things I would expect to go wrong first, because I could not run them:
@@ -98,7 +99,48 @@ Fill a reviewer form and check it:
 uv run gassess review-check $pkg path\to\REVIEW-step2.yaml
 ```
 
-## 5. With the real model (needs a key and costs money)
+## 5. Try the audit and agent-alone checks with a pretend agent
+
+These are the checks that stop a package being used if an agent solves it too easily (V7) or if it hides real flaws that are not on the list (V8). The tools never start an agent. You run the agent in prepared folders and they read what it left. Here you play the agent. No Docker, no key.
+
+```
+$pkg = "$env:TEMP\toy-try"
+Copy-Item tests/fixtures/packages/toy $pkg -Recurse
+$audit = "$env:TEMP\audit-try"
+uv run gassess audit prepare $pkg $audit
+```
+
+It makes three folders `run-1` to `run-3`, each with a `workspace` (the repo in its fixed state, without the brief), a `run.yaml` to fill in, and `PROMPT.txt`. Pretend the agent finished each run, and that run 1 reported one problem:
+
+```
+1..3 | ForEach-Object { Set-Content "$audit\run-$_\run.yaml" "agent_config: ac-test`nended_by: agent_stopped`n" }
+@"
+findings:
+  - title: "The README example prints nothing useful"
+    category: doc_error
+    location: "README.md:5"
+    evidence: "the usage block has no output"
+    status: found_not_fixed
+    fix_summary: ""
+    checked_by: ""
+"@ | Set-Content "$audit\run-1\workspace\FINDINGS.yaml"
+uv run gassess audit collect $pkg $audit
+```
+
+Expect "U-001 README.md:5 runs 1" and "V8 would be: fail", saying the report is not triaged. Triage it by adding this to `$pkg\validation\acknowledgements.yaml`, under the existing line:
+
+```yaml
+audit_triage:
+  - location: README.md:5
+    decision: rejected
+    note: "The example is meant to be minimal"
+```
+
+Run `uv run gassess validate $pkg --only V1 V8` and expect V8 `pass`.
+
+For V7, make five runs the same way (`gassess agent-alone prepare $pkg "$env:TEMP\runs-try"`), fill in each `run.yaml`, and pretend the agent fixed things by applying reference patches into a run's repo, for example `git -C "$env:TEMP\runs-try\run-2\workspace\tallybook" apply "$pkg\hidden\reference\G-001.patch"`. Then `gassess agent-alone grade $pkg "$env:TEMP\runs-try"`. Without `--image` it says the grading does not count, because V7 only counts runs graded in a container. With Docker running, add `--image` and the tag from `gassess build-image`. Fixing every gremlin in two runs fails V7. A gremlin fixed in all five runs gives a warning that needs a reason in `acknowledgements.yaml` (`accepted_warnings`). `docs/specs/06-validator.md` has the exact formats.
+
+## 6. With the real model (needs a key and costs money)
 
 Use a key from the dedicated pilot workspace with a low spend limit.
 
@@ -117,7 +159,7 @@ I could not test this part, so these are the likeliest problems:
 
 Send me the error text or the `discarded` list.
 
-## 6. After a real run, the Gate 1a numbers
+## 7. After a real run, the Gate 1a numbers
 
 With sessions graded and reviewer forms saved in `pilot\reviews\` next to `assignments.csv`:
 
@@ -128,7 +170,7 @@ uv run gassess analyze $pilot --packages path\to\folder\holding\packages --out g
 ## What is not built yet
 
 - The pilot VM, its network allowlist to the model API, the code-server layer in the image, installing the agent (OpenCode) and the terminal recorder.
-- The agent-alone runs and the unlisted-flaw audit (validator checks V7 and V8), which need the agent and a key.
+- The agent that makes the runs for V7 and V8. The checks themselves are built and read the runs you record, but no agent is installed or scripted yet. That waits for the agent choice (spike 1).
 - The spikes in `docs/specs/11-spike-plan.md`.
 - Real problem packages. Only the toy fixture exists.
 - The consent copy, data note, survey and reviewer form wording, which your co-founder drafts.

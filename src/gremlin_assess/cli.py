@@ -11,6 +11,21 @@ from pathlib import Path
 
 import yaml
 
+from gremlin_assess.agentchecks import (
+    AGENT_ALONE_PROMPT,
+    AGENT_ALONE_RUNS,
+    AUDIT_PROMPT,
+    AUDIT_RUNS,
+    AgentCheckError,
+    collect_audit,
+    evaluate_agent_alone,
+    evaluate_audit,
+    grade_agent_alone,
+    prepare_agent_alone,
+    prepare_audit,
+    write_agent_alone,
+    write_audit,
+)
 from gremlin_assess.analysis import analyze_pilot
 from gremlin_assess.brief import disclosed_counts, render_counts_table
 from gremlin_assess.container import docker_available
@@ -19,7 +34,7 @@ from gremlin_assess.grading import grade
 from gremlin_assess.grading.container_runner import container_runner
 from gremlin_assess.image import ImageError, ensure_image
 from gremlin_assess.matching import match_findings
-from gremlin_assess.package import PackageError, load_package
+from gremlin_assess.package import Package, PackageError, load_acknowledgements, load_package
 from gremlin_assess.packet import PacketError, build_packet
 from gremlin_assess.patches import PatchError, make_patch
 from gremlin_assess.pipeline import grade_session
@@ -50,6 +65,33 @@ def _load(path: Path):
         return None
 
 
+def _expected_tests(package: Package) -> list[str] | None:
+    """The tests seen in the trusted reference run, when the validator has recorded them."""
+    report_path = package.validation_dir / "report.json"
+    if report_path.is_file():
+        return json.loads(report_path.read_text(encoding="utf-8")).get("expected_tests") or None
+    return None
+
+
+def _container_runner(package: Package, image: str | None):
+    if not image:
+        return None
+    resources = package.meta.environment.resources
+    return container_runner(image, memory=resources.memory, cpus=resources.cpu)
+
+
+def _model_client(use_model: bool):
+    """Returns (client, error). Both are None when no model was asked for."""
+    if not use_model:
+        return None, None
+    from gremlin_assess.grading.model_client import AnthropicModelClient
+
+    try:
+        return AnthropicModelClient(), None
+    except RuntimeError as exc:
+        return None, f"Error: {exc}"
+
+
 def _cmd_build_image(args: argparse.Namespace) -> int:
     package = _load(args.package)
     if package is None:
@@ -72,6 +114,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         print(f"{check.id:<4} {check.name:<22} {check.status}")
         for problem in check.problems:
             print(f"       - {problem}")
+        for warning in check.warnings:
+            state = f"accepted: {warning.accepted}" if warning.accepted else "not accepted yet"
+            print(f"       ! {warning.id} ({state})")
+            print(f"         {warning.text}")
     if args.write:
         print(f"Report saved to {write_report(report, args.package)}")
 
@@ -83,6 +129,12 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if not_run:
         print(f"Not validated yet. Not run: {', '.join(not_run)}")
         return 0
+    if report.unaccepted_warnings:
+        print(
+            "Not validated yet. Accept each warning with a reason under accepted_warnings in "
+            "validation/acknowledgements.yaml: " + ", ".join(w.id for w in report.unaccepted_warnings)
+        )
+        return 0
     print("Validated.")
     return 0
 
@@ -91,17 +143,13 @@ def _cmd_grade(args: argparse.Namespace) -> int:
     package = _load(args.package)
     if package is None:
         return 1
-    # The list of tests recorded from the trusted reference run, when there is one.
-    expected = None
-    report_path = package.validation_dir / "report.json"
-    if report_path.is_file():
-        expected = json.loads(report_path.read_text(encoding="utf-8")).get("expected_tests") or None
-
-    runner = None
-    if args.image:
-        resources = package.meta.environment.resources
-        runner = container_runner(args.image, memory=resources.memory, cpus=resources.cpu)
-    result = grade(package, args.repo, python=args.python, runner=runner, expected_tests=expected)
+    result = grade(
+        package,
+        args.repo,
+        python=args.python,
+        runner=_container_runner(package, args.image),
+        expected_tests=_expected_tests(package),
+    )
     for item_id, item in sorted(result.items.items()):
         print(f"{item_id:<7} {item.fixed}")
     for guard in result.regressions:
@@ -231,26 +279,19 @@ def _cmd_grade_session(args: argparse.Namespace) -> int:
     package = _load(args.package)
     if package is None:
         return 1
-    runner = None
-    if args.image:
-        resources = package.meta.environment.resources
-        runner = container_runner(args.image, memory=resources.memory, cpus=resources.cpu)
-    client = None
-    if args.model:
-        from gremlin_assess.grading.model_client import AnthropicModelClient
-
-        try:
-            client = AnthropicModelClient()
-        except RuntimeError as exc:
-            print(f"Error: {exc}")
-            return 1
-    expected = None
-    report_path = package.validation_dir / "report.json"
-    if report_path.is_file():
-        expected = json.loads(report_path.read_text(encoding="utf-8")).get("expected_tests") or None
+    client, error = _model_client(args.model)
+    if error:
+        print(error)
+        return 1
     try:
         report = grade_session(
-            args.pilot, args.session, package, runner=runner, python=args.python, client=client, expected_tests=expected
+            args.pilot,
+            args.session,
+            package,
+            runner=_container_runner(package, args.image),
+            python=args.python,
+            client=client,
+            expected_tests=_expected_tests(package),
         )
     except (SessionError, ReportError) as exc:
         print(f"Error: {exc}")
@@ -259,6 +300,97 @@ def _cmd_grade_session(args: argparse.Namespace) -> int:
     if client is None:
         print("No model was used, so rubric items are not graded and open findings need a person.")
     return 0
+
+
+def _print_evaluation(label: str, evaluation) -> int:
+    print(f"{label} would be: {evaluation.status}")
+    for problem in evaluation.problems:
+        print(f"  - {problem}")
+    for warning_id, text in evaluation.warnings:
+        print(f"  ! {warning_id}: {text}")
+    return 1 if evaluation.status == "fail" else 0
+
+
+def _run_line(run: dict, package: Package) -> str:
+    if run["problems"]:
+        return f"{run['id']}: not graded. " + "; ".join(run["problems"])
+    gremlins = package.gremlins()
+    fixed = sum(1 for g in gremlins if run["items"][g.id]["fixed"] == "yes")
+    unsure = sum(1 for g in gremlins if run["items"][g.id]["fixed"] in ("needs_review", "not_graded"))
+    note = f", {unsure} not graded" if unsure else ""
+    return (
+        f"{run['id']}: fixed {fixed} of {len(gremlins)} gremlins{note}, "
+        f"{run['findings']['false_positives']} false positives, {run['changed_files']} files changed"
+    )
+
+
+def _cmd_agent_alone(args: argparse.Namespace) -> int:
+    package = _load(args.package)
+    if package is None:
+        return 1
+    try:
+        if args.action == "prepare":
+            dest = prepare_agent_alone(package, args.dir, args.runs)
+            print(f"Made {args.runs} candidate workspaces under {dest}.")
+            print("In each run-N/workspace, start the pinned agent and give it exactly this prompt, with no follow-up:")
+            print(f"  {AGENT_ALONE_PROMPT}")
+            print("When a run ends, fill in run-N/run.yaml. Then run `gassess agent-alone grade`.")
+            return 0
+        client, error = _model_client(args.model)
+        if error:
+            print(error)
+            return 1
+        table = grade_agent_alone(
+            package,
+            args.dir,
+            mode="container" if args.image else "local",
+            runner=_container_runner(package, args.image),
+            python=args.python,
+            client=client,
+            expected_tests=_expected_tests(package),
+        )
+        path = write_agent_alone(package, table)
+    except (AgentCheckError, ExportError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    print(f"Saved {path}")
+    for run in table["runs"]:
+        print(_run_line(run, package))
+    if not args.image:
+        print("Graded outside a container. V7 only counts container runs, so repeat with --image for the record.")
+    if client is None and any(i.kind == "gremlin" and i.grading == "rubric" for i in package.checklist):
+        print("No model was used, so rubric-backed gremlins are not graded. Add --model, or settle them in acknowledgements.yaml.")
+    acknowledgements, _ = load_acknowledgements(package.root)
+    return _print_evaluation("V7", evaluate_agent_alone(package, acknowledgements))
+
+
+def _cmd_audit(args: argparse.Namespace) -> int:
+    package = _load(args.package)
+    if package is None:
+        return 1
+    try:
+        if args.action == "prepare":
+            dest = prepare_audit(package, args.dir, args.runs)
+            print(f"Made {args.runs} workspaces of the reference state under {dest}.")
+            print("In each run-N/workspace, start the pinned agent and give it exactly this prompt:")
+            print(f"  {AUDIT_PROMPT}")
+            print("When a run ends, fill in run-N/run.yaml. Then run `gassess audit collect`.")
+            return 0
+        table = collect_audit(package, args.dir)
+        path = write_audit(package, table)
+    except (AgentCheckError, ExportError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    print(f"Saved {path}")
+    for report in table["reports"]:
+        where = report["path"] + (f":{report['start']}" if report["start"] is not None else "")
+        near = f" (near {', '.join(report['near_items'])})" if report["near_items"] else ""
+        runs = ",".join(str(n) for n in report["runs"])
+        print(f"{report['id']}  {where}  runs {runs}{near}  {report['titles'][0]}")
+    if not table["reports"]:
+        print("The runs reported nothing.")
+    acknowledgements, _ = load_acknowledgements(package.root)
+    return _print_evaluation("V8", evaluate_audit(package, acknowledgements))
 
 
 def _cmd_packet(args: argparse.Namespace) -> int:
@@ -355,6 +487,31 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("package", type=Path)
     command.add_argument("findings", type=Path)
     command.set_defaults(run=_cmd_match)
+
+    command = commands.add_parser("agent-alone", help="V7: prepare agent-alone runs, then grade them")
+    agent_actions = command.add_subparsers(dest="action", required=True)
+    sub = agent_actions.add_parser("prepare", help="make the candidate workspaces for the runs")
+    sub.add_argument("package", type=Path)
+    sub.add_argument("dir", type=Path, help="a new folder for the runs")
+    sub.add_argument("--runs", type=int, default=AGENT_ALONE_RUNS)
+    sub = agent_actions.add_parser("grade", help="grade the finished runs and record the result in the package")
+    sub.add_argument("package", type=Path)
+    sub.add_argument("dir", type=Path, help="the folder made by prepare")
+    sub.add_argument("--image", help="run the hidden tests in this container image. V7 only counts container runs")
+    sub.add_argument("--python", help=python_help)
+    sub.add_argument("--model", action="store_true", help="use the grading model for rubric-backed gremlins")
+    command.set_defaults(run=_cmd_agent_alone)
+
+    command = commands.add_parser("audit", help="V8: prepare unlisted-flaw audit runs, then collect them")
+    audit_actions = command.add_subparsers(dest="action", required=True)
+    sub = audit_actions.add_parser("prepare", help="make workspaces of the reference state for the runs")
+    sub.add_argument("package", type=Path)
+    sub.add_argument("dir", type=Path, help="a new folder for the runs")
+    sub.add_argument("--runs", type=int, default=AUDIT_RUNS)
+    sub = audit_actions.add_parser("collect", help="merge the runs' findings and record them in the package")
+    sub.add_argument("package", type=Path)
+    sub.add_argument("dir", type=Path, help="the folder made by prepare")
+    command.set_defaults(run=_cmd_audit)
 
     command = commands.add_parser("session", help="create and manage session folders")
     actions = command.add_subparsers(dest="action", required=True)

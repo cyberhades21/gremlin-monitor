@@ -36,6 +36,13 @@ uv run gassess check-findings <file>           check a findings file's format
 uv run gassess match <package-dir> <findings>  match findings to items by location
 ```
 
+Validating a package with an agent (see [spec 12](docs/specs/12-pilot-runbook.md), "Validating a package"). The tools never start an agent. They prepare folders, and read what the agent left:
+
+```
+uv run gassess audit prepare|collect <package-dir> <dir>                           V8: the unlisted-flaw audit
+uv run gassess agent-alone prepare|grade <package-dir> <dir> [--image TAG] [--model]   V7: agent alone, 5 runs
+```
+
 Running a pilot (see [docs/testing.md](docs/testing.md) for a walk-through):
 
 ```

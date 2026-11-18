@@ -15,8 +15,9 @@ from pathlib import Path
 
 import yaml
 
+from gremlin_assess.agentchecks import AGENT_ALONE_RUNS, MAX_FULL_SOLVES, evaluate_agent_alone
 from gremlin_assess.models import ChecklistItem
-from gremlin_assess.package import Package, load_package
+from gremlin_assess.package import Package, load_acknowledgements, load_package
 from gremlin_assess.packet import load_assignments
 from gremlin_assess.reviews import ReviewError, Step1, Step2, load_step1, load_step2
 from gremlin_assess.session import load_meta
@@ -59,7 +60,7 @@ class Measure:
     threshold: str
     status: str  # met | not_met | reported | not_measured
     note: str = ""
-    unit: str = "percent"  # percent | points | number | money
+    unit: str = "percent"  # percent | points | number | money | count
 
     def shown(self) -> str:
         if self.value is None:
@@ -69,6 +70,7 @@ class Measure:
             "points": f"{self.value * 100:+.1f} points",
             "number": f"{self.value:.2f}",
             "money": f"${self.value:.2f}",
+            "count": f"{self.value:.0f}",
         }[self.unit]
 
 
@@ -185,12 +187,23 @@ def _measure(name, rate, n, threshold, passed, unit="percent") -> Measure:
     return Measure(name, rate, n, threshold, "met" if passed else "not_met", unit=unit)
 
 
+def _agent_alone_measure(results: dict[str, tuple[int, int]] | None) -> Measure:
+    """`results` maps a package id to (runs that fixed every scored gremlin, runs recorded)."""
+    name = "Agent alone (full solves in 5 runs)"
+    threshold = f"at most {MAX_FULL_SOLVES} of {AGENT_ALONE_RUNS} per package"
+    if not results:
+        return Measure(name, None, 0, threshold, "not_measured", "validator check V7 has not run", "count")
+    worst = max(full for full, _ in results.values())
+    note = "; ".join(f"{package_id}: {full} of {runs}" for package_id, (full, runs) in sorted(results.items()))
+    return Measure(name, worst, len(results), threshold, "met" if worst <= MAX_FULL_SOLVES else "not_met", note, "count")
+
+
 def compute_gate(
     sessions: list[SessionData],
     reviews: list[ReviewData],
     step1_overall: dict[str, list[int]],
     *,
-    agent_alone: str | None = None,
+    agent_alone: dict[str, tuple[int, int]] | None = None,
 ) -> GateReport:
     ours_sessions = [s for s in sessions if s.agent_source == "ours"]
     n, agree, disagreements = item_agreement(sessions, reviews)
@@ -216,7 +229,7 @@ def compute_gate(
         _measure("Rubric pass agreement (passes within 1 point)", pass_agree / pass_n if pass_n else None, pass_n, f"at least {RUBRIC_PASS_AGREEMENT_MIN:.0%}", pass_n > 0 and pass_agree / pass_n >= RUBRIC_PASS_AGREEMENT_MIN),
         Measure("Grader against reviewers (share within 1 point)", gv_within, gv_n, "reported", "reported" if gv_n else "not_measured", f"mean absolute difference {gv_mean:.2f}" if gv_mean is not None else ""),
         Measure("Overall check (rank correlation, directional only)", corr, corr_n, "reported", "reported" if corr is not None else "not_measured", "needs at least 3 sessions with an overall judgment" if corr is None else "", "number"),
-        Measure("Agent alone (full solves in 5 runs)", None, 0, "at most 1 of 5 per package", "not_measured", agent_alone or "validator check V7 has not run"),
+        _agent_alone_measure(agent_alone),
         Measure("Cost per session (our agent only)", statistics.mean(costs) if costs else None, len(costs), "reported", "reported" if costs else "not_measured", f"{len(sessions) - len(ours_sessions)} sessions used the candidate's own agent and are left out" if len(ours_sessions) != len(sessions) else "", "money"),
     ]
     return GateReport(measures, disagreements, len(sessions), len(reviews))
@@ -358,5 +371,14 @@ def analyze_pilot(pilot: Path, packages_dir: Path) -> str:
 
     reviews, overall = _load_reviews(Path(pilot), packages, sessions)
     reviews = [r for r in reviews if r.session in sessions]
-    gate = compute_gate(list(sessions.values()), reviews, overall)
+
+    # Only runs that are recorded, current and decided count: a pass or a fail from V7.
+    agent_alone: dict[str, tuple[int, int]] = {}
+    for package in packages.values():
+        acknowledgements, _ = load_acknowledgements(package.root)
+        evaluation = evaluate_agent_alone(package, acknowledgements)
+        if evaluation.table:
+            agent_alone[package.meta.id] = (evaluation.table["full_solves"], evaluation.table["runs"])
+
+    gate = compute_gate(list(sessions.values()), reviews, overall, agent_alone=agent_alone)
     return render_gate(gate, _hours(package_dirs), _fairness(Path(pilot)))
