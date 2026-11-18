@@ -8,6 +8,8 @@ Internal tooling for the assessment pilot. The specs are in [docs/specs/](docs/s
 |---|---|
 | `docs/specs/` | Specs and decision records |
 | `docs/testing.md` | How to run and try everything yourself |
+| `docs/spikes/` | Write-ups of the spikes: the agent desk check and the gateway |
+| `spikes/` | Throwaway experiments with their own tests. Never promoted without a rewrite (spec 11) |
 | `src/gremlin_assess/` | Operator-side tooling: package checks, grading, validation, sessions, reports, Gate 1a analysis |
 | `src/workspace_tools/` | The small tools that ship inside a candidate workspace. Plain names only |
 | `tests/` | Tests, with a toy package under `tests/fixtures/packages/toy/` |

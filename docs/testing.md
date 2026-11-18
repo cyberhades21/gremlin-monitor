@@ -9,7 +9,7 @@ uv sync
 uv run pytest -m "not docker"
 ```
 
-Expect 180 passed and 12 deselected, with no failures. It takes about two minutes. These cover the package checks, the grading harness (it runs real hidden tests in a local process), the validator including the agent-alone and audit checks (V7 and V8) with a pretend agent, matching, the rubric grader with a scripted fake model, sessions, packets, reviewer forms, the report and the Gate 1a arithmetic.
+Expect 204 passed and 12 deselected, with no failures. It takes about two minutes. 24 of those are the gateway spike's tests (`spikes/gateway/`), which use a stand-in for the model API and need no key. These cover the package checks, the grading harness (it runs real hidden tests in a local process), the validator including the agent-alone and audit checks (V7 and V8) with a pretend agent, matching, the rubric grader with a scripted fake model, sessions, packets, reviewer forms, the report and the Gate 1a arithmetic.
 
 ## 2. Docker tests (first run takes a few minutes)
 

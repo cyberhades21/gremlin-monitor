@@ -27,7 +27,7 @@ build-backend = "hatchling.build"
 packages = ["src/gremlin_assess", "src/workspace_tools"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "spikes"]
 # The fixture packages contain their own test files. They are run by the
 # grading harness, never collected by this project's test run.
 norecursedirs = ["fixtures", ".venv"]
