@@ -9,6 +9,7 @@ Status: run 2026-11-19, on one laptop. A local model (Ollama) stood in for Claud
 3. **One gateway pin covers every call that was seen.** Each session makes a main request and a title request, and a compaction request whenever its context fills. All of them ask for the session's model. The agent's hidden agents have no model of their own.
 4. **Five findings change what we would ship** (see "Findings that change the setup"). One of them, a deny rule that breaks an untouched agent, was my own mistake in a first draft of the config and was found by bisecting.
 5. **The whole V7 and V8 procedure runs with this agent** (see "Running it for V7 and V8"). That part was a rehearsal of the mechanics. A 4-billion-parameter model's results say nothing about the problem.
+6. **The Agent SDK harness also works behind the gateway**, as a plumbing check only. It asks for just the pinned model, and it brings baggage that OpenCode does not: attribution text naming Claude Code, a billing marker, a larger tool surface and 1.5 to 2 times the input per turn (see "The Agent SDK harness, a plumbing look").
 
 ## What was run
 
@@ -112,6 +113,35 @@ Candidates will use the terminal UI, not `opencode run`, so it was driven in a p
 
 The UI asked the terminal a few questions at startup (cursor position, terminal attributes, two colour queries). The test answered them, as a real terminal does. Whether it waits for ever when nothing answers was not tested. The test used `--standalone`.
 
+## The Agent SDK harness, a plumbing look
+
+The runner-up from the desk check, in a second image (`spikes/sandbox/Dockerfile.sdk`): `claude-agent-sdk` 0.2.185 from PyPI, released the same morning, which bundles the Claude Code binary in a 157 MB wheel. This tested how the harness behaves behind our gateway. It is not a decision to ship it: D15 stands, and the written answer from Anthropic is still needed.
+
+Set up the way the desk check described: `ANTHROPIC_BASE_URL=http://gw:8080` (no `/v1`), the session token as `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` as the pin, the four disable switches, `setting_sources=[]`, `bypassPermissions`, and `WebSearch` and `WebFetch` disallowed. The context window was 32k, because its prompt is larger.
+
+| | Result |
+|---|---|
+| Starts with no route out | Yes. A one-turn prompt took 7 to 26 seconds (the first included loading the model). The gateway saw no request it could not attribute to a session, so no `HEAD /api/hello` and no token counting |
+| Requests | `POST /v1/messages?beta=true`, one per turn, streamed |
+| Models requested | **Only the pinned one.** In a 15-request run on the V7 prompt, with no setting for its small model, every request named the pin. No title call, no background call |
+| Tool calls | 13 tool calls went out and back through the gateway, with `stop_reason: "tool_use"` each time |
+| Fingerprint | `claude-cli/2.1.328 (external, sdk-py, agent-sdk/0.2.185)` |
+| Beta flags | Eight: `claude-code-20250219`, `interleaved-thinking-2025-05-14`, `context-management-2025-06-27`, `mid-conversation-tool-changes-2026-07-01`, `thinking-token-count-2026-05-13`, `advanced-tool-use-2025-11-20`, `effort-2025-11-24`, `thinking-display-updates-2026-08-18` |
+| Other body fields | `thinking: {"type": "adaptive", "display": "updates"}`, `output_config: {"effort": "high"}`, a `context_management` edit, `max_tokens` 32000, and `metadata.user_id` holding a per-install device id and the session id |
+| Size | The first request was about 9,200 input tokens and grew to 13,000 by turn 14. OpenCode's grew from 4,500 to 8,700 over a whole run. So each turn sends 1.5 to 2 times as much input |
+| Transcript | `~/.claude/projects/-workspace/<session>.jsonl`, 120 KB for one turn because it holds the full prompt |
+| Result object | A `ResultMessage` with duration, turns, stop reason, usage and its own cost. Its `total_cost_usd` was 0.037 for a model it does not know, so it cannot be used for cost |
+
+The task run did not finish. After 13 minutes and 13 completed tool turns the local model was still working on a 13,000-token prompt, and that one call had run for 6 minutes. That is the 4B model on a 6 GB GPU, not the harness, and I stopped it. So no `FINDINGS.yaml` came out of it.
+
+What the harness puts in the prompt that we would have to deal with:
+
+1. **Its own attribution text.** The first message carries a reminder telling the agent to end commit messages with `Co-Authored-By: Claude Code <noreply@anthropic.com>` and pull request text with `Generated with Claude Code`. A candidate's git history would carry both, and the name breaks the branding rule. A setting for this exists. It was not tested.
+2. **A billing marker.** The system prompt opens with `x-anthropic-billing-header: cc_version=2.1.328.afe; cc_entrypoint=sdk-py`. Whatever the answer on terms, Anthropic can see this traffic as coming from the SDK entry point of Claude Code.
+3. **A larger tool surface than OpenCode's ten.** `Agent`, `ListAgents`, `ScheduleWakeup`, `Workflow` and `ToolSearch`, plus deferred tools for cron jobs, worktrees, monitors, messages and notebooks. A sandbox would have to disallow most of them.
+
+Not tested: compaction, a clean finish of a long run, the attribution setting, an unreachable gateway, and the harness with tools disallowed.
+
 ## What a 4B model showed
 
 One run of the V7 prompt, "Complete the tasks in BRIEF.md. Record your findings in FINDINGS.yaml.", on the toy package:
@@ -157,7 +187,7 @@ This runner is spike code. A real one belongs in `src/` behind an agent interfac
 - **The terminal UI in a real terminal.** The UI was driven in a pseudo-terminal that answered its startup questions. It was not tried inside code-server's terminal, or with a terminal that does not answer.
 - **The summary agent.** It never appeared, in any run. It has no model of its own either (`debug agents`), but no call was seen.
 - **The shared background service.** Every run used `--standalone`. Without it OpenCode starts one background server per user, and the key must then be on that server.
-- **OpenCode 1.19.6**, still marked Latest on GitHub, and the Agent SDK harness and Cline.
+- **OpenCode 1.19.6**, still marked Latest on GitHub, and Cline.
 - **The code-server layer, the terminal recorder and the snapshot timer.** None is built.
 
 ## Reproducing it

@@ -183,7 +183,21 @@ uv run python spikes/sandbox/rig.py agent matrix    # expect: six variants, each
 
 The first call loads the model, so `wiring` takes a minute or two. Both commands clean up their containers and networks. If one is interrupted, `uv run python spikes/sandbox/rig.py down` removes them. Results and the gateway's logs go to `pilot/spikes/sandbox/`, which is outside git, because the logs hold every prompt and response.
 
-Other experiments: `agent probe` (startup and one tiny prompt), `agent override` (candidate config against the locked one, with a control), `agent bisect` (which managed deny rule breaks the agent), `agent task` (the V7 prompt for up to `--minutes`), and `agent prod-shape` (see the request shape for the real `claude-opus-5-5` id, which makes a temporary local alias of that name and removes it afterwards).
+Other experiments, all `uv run python spikes/sandbox/rig.py agent <name>`:
+
+| Name | What it shows |
+|---|---|
+| `probe` | Startup with no route out, and one tiny prompt |
+| `override` | Candidate-owned config against the locked one, with a control run without the lock |
+| `matrix` | The hardened lock against each kind of widening on its own, then all together |
+| `bisect` | Which managed deny rule breaks an untouched agent (it was `integration.use`) |
+| `prod-shape` | The request shape for the real `claude-opus-5-5` id. It makes a temporary local alias of that name in Ollama and removes it afterwards |
+| `task` | The V7 prompt, for up to `--minutes` |
+| `compaction` | A tiny declared context window, to see the hidden compaction call |
+| `tui` | The interactive terminal UI, driven in a pseudo-terminal |
+| `sdk`, `sdk-task` | The Agent SDK harness. Needs a second image: `docker build -t gassess-spike-sdk:0.2.185 --build-arg BASE=<tag> --build-arg SDK_VERSION=0.2.185 -f spikes/sandbox/Dockerfile.sdk spikes/sandbox` |
+
+`sdk-task` does not finish with a 4B model on a small GPU, which is expected. Only one rig can run at a time, because each one removes the containers of the last.
 
 To rehearse V7 and V8 with this agent, make the run folders as in section 5 on a copy of the toy package, then fill them with `uv run python spikes/sandbox/rig.py runs <runs-dir> --minutes 8` and grade with `gassess agent-alone grade <pkg> <runs-dir> --image <tag>`. Expect V7 `pass` (a small model fixes nothing) and V8 `not_run` or `pass`, depending on what the agent wrote.
 

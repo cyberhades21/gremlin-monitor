@@ -1,6 +1,6 @@
 # Spike 1, desk check: which agent do candidates get
 
-Status: desk check, 2026-11-19. Nothing here was run. The facts come from primary pages (repo files, official docs) that helper readers fetched and summarised, so each claim has a confidence mark. Hands-on testing decides. This note says what to test and in what order.
+Status: desk check, 2026-11-19. Nothing in this note was run. Later the same day OpenCode and the Agent SDK harness were run behind the gateway against a local model, and several unknowns below were answered. See `01-opencode-hands-on.md`. The facts come from primary pages (repo files, official docs) that helper readers fetched and summarised, so each claim has a confidence mark. Hands-on testing decides. This note says what to test and in what order.
 
 Marks: **yes** is documented. **partly** is documented with a gap. **no** is documented as not available. **unknown** was not found or not read.
 

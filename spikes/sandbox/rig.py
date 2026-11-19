@@ -953,6 +953,50 @@ def agent_sdk(image: str) -> int:
     return 0
 
 
+def agent_sdk_task(image: str, minutes: int) -> int:
+    """The Agent SDK harness on the V7 prompt, with only the main model set.
+
+    Any request for another model (the harness keeps a small one for background work) would be refused
+    by the gateway's pin and show up here."""
+    ensure_model(MODEL32, 32768)
+    run = start_agent_run(image, "sdk-task", locked=False, model=MODEL32, minutes=minutes + 10, max_requests=300)
+    try:
+        env = {
+            "ANTHROPIC_BASE_URL": f"http://{GW_ALIAS}:{GW_PORT}", "ANTHROPIC_API_KEY": run.token,
+            "ANTHROPIC_MODEL": MODEL32, "PIN": MODEL32,
+            "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1", "DISABLE_AUTOUPDATER": "1",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CONFIG_DIR": "/home/candidate/.claude",
+            "PROBE_PROMPT": AGENT_PROMPT, "MAX_TURNS": "40",
+        }
+        started = time.time()
+        result = run.rig.python(run.sandbox.name, SDK_SCRIPT, env=env, timeout=minutes * 60 + 60)
+        took = time.time() - started
+        (run.run_dir / "sdk-task.out").write_text(result.stdout + "\n--- stderr\n" + result.stderr, encoding="utf-8")
+        lines = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
+        kinds: dict[str, int] = {}
+        for line in lines:
+            kinds[line.get("kind", "done")] = kinds.get(line.get("kind", "done"), 0) + 1
+        say(f"exit {result.returncode} in {took:.0f}s; messages from the SDK by kind: {kinds}")
+        finals = [line for line in lines if line.get("kind") == "ResultMessage"]
+        say("final result: " + (finals[-1]["text"][:700] if finals else "(none)"))
+        if result.stderr.strip():
+            say("stderr: " + result.stderr.strip()[-500:])
+        rows = run.rows()
+        say(f"What the gateway saw ({len(rows)} requests):")
+        print_rows(rows)
+        say(f"models requested: {sorted({str(r['model']) for r in rows})}; statuses: {sorted({str(r['status']) for r in rows})}")
+        tools = sorted({t for r in rows for t in r["tools"]})
+        say(f"tools offered: {tools}")
+        say(f"the unattributed requests: {len(run.rig.gateway_log('_unauthenticated'))}")
+        test = run.rig.sh(run.sandbox.name, "cd /workspace/tallybook && python -m pytest -q -p no:cacheprovider 2>&1 | tail -4", timeout=120)
+        say("public tests after the run: " + test.stdout.strip().replace("\n", " | "))
+    finally:
+        finish_agent_run(run)
+    say(f"Everything is in {run.run_dir}")
+    return 0
+
+
 def agent_matrix(image: str) -> int:
     """The hardened managed config against each kind of widening on its own, then all together.
 
@@ -1177,7 +1221,7 @@ def main(argv: list[str] | None = None) -> int:
     wiring.add_argument("--image", default="gassess-spike-sbx:oc-2.3.2")
     agent = commands.add_parser("agent", help="OpenCode in the sandbox, through the gateway, to the local model")
     agent.add_argument("experiment", choices=["probe", "override", "override2", "matrix", "bisect", "task",
-                                              "prod-shape", "compaction", "tui", "sdk"])
+                                              "prod-shape", "compaction", "tui", "sdk", "sdk-task"])
     agent.add_argument("--image", default=None, help="default: the OpenCode image, or the SDK image for `sdk`")
     agent.add_argument("--minutes", type=int, default=15, help="time limit for the task experiment")
     runs = commands.add_parser("runs", help="run the agent in every folder `gassess agent-alone|audit prepare` made")
@@ -1194,7 +1238,7 @@ def main(argv: list[str] | None = None) -> int:
         Rig(new_run_dir("down"), "unused").down(keep_logs=False)
         return 0
     if args.command == "agent":
-        image = args.image or ("gassess-spike-sdk:0.2.185" if args.experiment == "sdk" else "gassess-spike-sbx:oc-2.3.2")
+        image = args.image or ("gassess-spike-sdk:0.2.185" if args.experiment.startswith("sdk") else "gassess-spike-sbx:oc-2.3.2")
         if args.experiment == "probe":
             return agent_probe(image)
         if args.experiment == "override":
@@ -1211,6 +1255,8 @@ def main(argv: list[str] | None = None) -> int:
             return agent_tui(image)
         if args.experiment == "sdk":
             return agent_sdk(image)
+        if args.experiment == "sdk-task":
+            return agent_sdk_task(image, args.minutes)
         if args.experiment == "prod-shape":
             return agent_prod_shape(image)
         return agent_task(image, args.minutes)
