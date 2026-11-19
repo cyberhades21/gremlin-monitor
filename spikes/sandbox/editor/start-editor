@@ -1,0 +1,26 @@
+#!/bin/sh
+# Starts the browser editor inside the sandbox. The launcher runs this with the session token and the
+# editor password in the environment. The terminals the editor opens inherit that environment, which
+# is how `opencode` finds the gateway token.
+set -eu
+
+data="$HOME/.local/share/code-server"
+mkdir -p "$data/User" "$HOME/.config/code-server"
+cp /opt/gassess/editor-settings.json "$data/User/settings.json"
+
+# An empty gallery switches the extension marketplace off. Left alone, the browser asks open-vsx.org.
+export EXTENSIONS_GALLERY='{}'
+
+# Proxy, downloads and uploads are not needed in a session. Closing uploads also closes the one way to
+# bring in an extension file, since there is no marketplace and no network.
+exec /opt/code-server/bin/code-server \
+  --bind-addr 0.0.0.0:8080 \
+  --auth password \
+  --disable-telemetry \
+  --disable-update-check \
+  --disable-proxy \
+  --disable-file-downloads \
+  --disable-file-uploads \
+  --disable-workspace-trust \
+  --disable-getting-started-override \
+  /workspace

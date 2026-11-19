@@ -15,7 +15,7 @@ A spike is a short, throwaway experiment that answers one question. Spike code l
 | # | Question | Method | Hours | Earliest start |
 |---|---|---|---|---|
 | 1 | Which agent harness do candidates get at Gate 1b? | Desk check of every option against the checklist below, then hands-on with the best three | 10 | After pilot tooling works |
-| 2 | Which browser editor, and is one needed at Gate 1b? | Lock down code-server and OpenVSCode Server and compare. Use pilot experience of stock code-server | 4 | After the first pilot sessions |
+| 2 | Which browser editor, and is one needed at Gate 1b? | Lock down code-server and OpenVSCode Server and compare. Use pilot experience of stock code-server. **Code-server half done 2026-11-19** (`docs/spikes/02-browser-editor.md`): it can be locked down, with three defaults changed. OpenVSCode Server not tried | 4 | After the first pilot sessions |
 | 3 | Can the agent run outside the candidate container? | Paper design, then one test with the leading agent | 4 | After spike 1 |
 | 4 | Can the process signals in spec 05 be derived without an editor extension? | Derive P1 to P4 from pilot transcripts, recordings and snapshots. Compare with reviewers' hand ratings | 5 | After 6 pilot sessions are reviewed |
 | 5 | Can a thin gateway do what Gate 1b needs? | Build a minimal proxy and run the leading agent through it | 7 | Any time |

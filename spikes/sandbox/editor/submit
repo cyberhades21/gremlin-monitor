@@ -1,0 +1,5 @@
+#!/bin/sh
+# What the brief calls `submit`: check FINDINGS.yaml and save a copy of the workspace.
+export PYTHONPATH="/opt/gassess/lib:/opt/gassess${PYTHONPATH:+:$PYTHONPATH}"
+export SUBMIT_DIR="${SUBMIT_DIR:-/submissions}"
+exec python -m workspace_tools.submit "$@"

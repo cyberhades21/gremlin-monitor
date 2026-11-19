@@ -201,9 +201,53 @@ Other experiments, all `uv run python spikes/sandbox/rig.py agent <name>`:
 
 To rehearse V7 and V8 with this agent, make the run folders as in section 5 on a copy of the toy package, then fill them with `uv run python spikes/sandbox/rig.py runs <runs-dir> --minutes 8` and grade with `gassess agent-alone grade <pkg> <runs-dir> --image <tag>`. Expect V7 `pass` (a small model fixes nothing) and V8 `not_run` or `pass`, depending on what the agent wrote.
 
+## 9. Try a candidate session in your browser (Docker and Ollama, no key, no cost)
+
+This is the nearest thing to what a candidate sees: a browser editor, a terminal with the assistant in it, and a `submit` command. The model is the same small local one as in section 8, so the assistant is weak. This is about how it feels and whether the plumbing holds. The write-up is `docs/spikes/02-browser-editor.md`.
+
+```
+uv run python spikes/sandbox/rig.py build-editor     # once. Needs the network for a 237 MB download, and the OpenCode image from section 8
+uv run python spikes/sandbox/rig.py editor
+```
+
+It runs eight checks inside the sandbox (expect `Self-check: 8 of 8 passed`), then prints an address and a password. Open the address in a browser **on the same machine**. It listens on `127.0.0.1` only, so another device cannot reach it.
+
+What to try, in this order:
+
+1. Log in. You should see an empty editor with `BRIEF.md`, `FINDINGS.yaml` and `tallybook` in the file list. There should be no chat panel and no welcome page.
+2. Read `BRIEF.md` as a candidate would. Open `tallybook/docs/limits.md` and `tallybook/tallybook/limits.py` and spot where they disagree.
+3. Open a terminal with Ctrl+` and type `opencode`. Ask it something small, such as "Explain tallybook/tallybook/limits.py in one sentence". Expect short answers and a slow first one while the model loads.
+4. Change a file in the editor. It saves by itself.
+5. Fill in `FINDINGS.yaml` (the comments at the top explain each field), then type `submit` in the terminal. Expect `Submitted: submission-....tar.gz`. If the file is malformed it says what to fix.
+6. Refresh the page. The terminal and the assistant should still be there.
+7. Try to get out, as a curious candidate would: `curl https://example.com` should fail, the Extensions view should offer nothing to install, and `touch /etc/opencode/opencode.json` should say the file system is read-only.
+
+To end, press any key in the PowerShell window that is running the command, or press Ctrl+C. It removes the containers and copies the logs out. Everything is in `pilot\spikes\sandbox\editor-<time>\`, which is outside git because it holds every prompt and answer: `workspace`, `submissions`, `editor.log`, `self-check.json`, `requests.json` and `gateway\`.
+
+Grade what you submitted with the same commands as section 4:
+
+```
+$run = "pilot\spikes\sandbox\editor-<time>"          # the folder the command named
+$pilot = "$env:TEMP\pilot-editor"
+uv run gassess session new $pilot S-001 tests/fixtures/packages/toy --candidate C-01
+uv run gassess session start $pilot S-001
+uv run gassess session collect $pilot S-001 (Get-ChildItem "$run\submissions\submission-*.tar.gz" | Select-Object -First 1).FullName
+uv run gassess grade-session $pilot S-001 tests/fixtures/packages/toy
+```
+
+Open `$pilot\sessions\S-001\report.md`. If you reported the limit bug, G-001 reads "reported, not fixed".
+
+Things you will notice:
+- `FINDINGS.yaml` has a `!` icon. That is the editor's icon for YAML files, not an error.
+- The model's token lasts 60 minutes (`--minutes`) and stops at 300 requests (`--max-requests`). After that the assistant says it cannot reach the model. Start a new session.
+- One session at a time. `uv run python spikes/sandbox/rig.py down` cleans up after an interrupted run.
+- If port 18443 is busy, add `--port 18500`.
+- Only Microsoft Edge was tried. Other browsers should behave the same but were not checked.
+- Send me the `editor.log` and the `self-check.json` from the run folder if anything looks wrong.
+
 ## What is not built yet
 
-- The pilot VM, its network allowlist to the model API, the code-server layer in the image and the terminal recorder. OpenCode is installed in a spike image and runs through the gateway (section 8), but nothing here has run against the real model API.
+- The pilot VM, its network allowlist to the model API, the terminal recorder and the snapshot timer. OpenCode and a browser editor are installed in spike images and run through the gateway (sections 8 and 9), but nothing here has run against the real model API.
 - A runner for V7 and V8 that is not spike code. `rig.py runs` fills the run folders for OpenCode, and a real one belongs in `src/` behind an agent interface.
 - The remaining spikes in `docs/specs/11-spike-plan.md`. Spike 1's hands-on part is done for OpenCode only, and against a local model.
 - Real problem packages. Only the toy fixture exists.

@@ -118,7 +118,7 @@ class Rig:
         raise RigError("the gateway did not start: " + docker("logs", GW, check=False).stdout[-600:])
 
     def start_sandbox(self, name: str, *, workspace: Path | None = None, config: Path | None = None,
-                      read_only: bool = True) -> Sandbox:
+                      read_only: bool = True, mounts: list[tuple[Path, str]] | None = None) -> Sandbox:
         args = [
             "run", "-d", "--name", name, "--label", LABEL, "--network", NET_SBX,
             "--memory", "2g", "--cpus", "2", "--pids-limit", "512",
@@ -134,6 +134,8 @@ class Rig:
             args += ["--mount", f"type=bind,source={workspace},target=/workspace"]
         if config is not None:
             args += ["--mount", f"type=bind,source={config},target=/etc/opencode/opencode.json,readonly"]
+        for source, target in mounts or []:  # extra folders the sandbox may write to
+            args += ["--mount", f"type=bind,source={source},target={target}"]
         docker(*args, self.image, "sleep", "infinity")
         ip = docker(
             "inspect", "-f", f'{{{{(index .NetworkSettings.Networks "{NET_SBX}").IPAddress}}}}', name
@@ -1214,9 +1216,243 @@ def agent_task(image: str, minutes: int) -> int:
     return 0
 
 
+# --- the browser editor ---------------------------------------------------------------------
+
+EDITOR_DIR = ROOT / "spikes" / "sandbox" / "editor"
+EDITOR_BASE = "gassess-spike-sbx:oc-2.3.2"
+CODE_SERVER_VERSION = "4.145.2"
+# The digest GitHub shows for the linux-amd64 asset of that release. The build checks the download against it.
+CODE_SERVER_SHA256 = "2f6db6c3e8b733dd6b3aeee83532e148b2bae2e392353ba85452d03572348962"
+EDITOR_IMAGE = f"gassess-spike-ed:cs-{CODE_SERVER_VERSION}"
+
+
+def build_editor_image(base: str = EDITOR_BASE) -> int:
+    """Build the sandbox image that has the browser editor. The context is a temporary folder that holds
+    the editor files and a copy of src/workspace_tools, so that `submit` works inside the sandbox."""
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="gassess-editor-ctx-") as tmp:
+        context = Path(tmp)
+        shutil.copytree(EDITOR_DIR, context, dirs_exist_ok=True, ignore=shutil.ignore_patterns("front.py"))
+        shutil.copytree(ROOT / "src" / "workspace_tools", context / "workspace_tools",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        proc = subprocess.run([
+            "docker", "build", "--progress=plain", "-t", EDITOR_IMAGE,
+            "--build-arg", f"BASE={base}",
+            "--build-arg", f"CODE_SERVER_VERSION={CODE_SERVER_VERSION}",
+            "--build-arg", f"CODE_SERVER_SHA256={CODE_SERVER_SHA256}",
+            str(context),
+        ])
+    if proc.returncode == 0:
+        say(f"Built {EDITOR_IMAGE}")
+    return proc.returncode
+
+
+FRONT = "gassess-spike-front"
+EDITOR_PORT = 8080  # inside the sandbox
+EDITOR_LOG = "/tmp/editor.log"
+
+
+def editor_env(token: str, password: str) -> dict[str, str]:
+    """What the editor process starts with. Its terminals inherit all of it."""
+    return {"PASSWORD": password, "ANTHROPIC_API_KEY": token, **AGENT_ENV}
+
+
+def start_front(rig: Rig, sandbox: Sandbox, port: int) -> None:
+    """The one way in from the host: a forwarder on both networks that publishes one loopback port."""
+    docker(
+        "run", "-d", "--name", FRONT, "--label", LABEL, "--network", NET_OUT,
+        "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--memory", "128m",
+        "-p", f"127.0.0.1:{port}:9000",
+        "--mount", f"type=bind,source={EDITOR_DIR / 'front.py'},target=/front.py,readonly",
+        PY_IMAGE, "python", "/front.py", "9000", sandbox.name, str(EDITOR_PORT),
+    )
+    docker("network", "connect", NET_SBX, FRONT)
+
+
+def wait_until(check, seconds: float, what: str) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if check():
+            return
+        time.sleep(1)
+    raise RigError(f"{what} did not come up within {seconds:.0f}s")
+
+
+def key_pressed() -> bool:
+    """True once someone has pressed a key in this console. Polled, so that no thread is left reading
+    the keyboard when the program ends. False when there is no console to read."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            if msvcrt.kbhit():
+                msvcrt.getwch()
+                return True
+            return False
+        import select
+        if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.readline()
+            return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def editor_self_check(rig: Rig, sandbox: Sandbox) -> list[Check]:
+    """What a candidate's terminal should find. Run before the address is handed out."""
+    checks: list[Check] = []
+
+    def add(check_id: str, name: str, ok: bool, evidence: str) -> None:
+        checks.append(Check(check_id, name, ok, short(evidence, 150)))
+
+    r = rig.sh(sandbox.name, "id -un")
+    add("E1", "the terminal runs as the unprivileged user", r.stdout.strip() == "candidate", r.stdout.strip())
+    r = rig.python(sandbox.name, (
+        "import socket\n"
+        "for label, fn in (('connect', lambda: socket.create_connection(('1.1.1.1', 443), 3)),\n"
+        "                  ('dns', lambda: socket.getaddrinfo('example.com', 443))):\n"
+        "    try:\n        fn(); print(label, 'WORKED')\n    except OSError as exc:\n        print(label, 'blocked')\n"))
+    add("E2", "a terminal has no route out and no outside DNS", "WORKED" not in r.stdout and r.stdout.count("blocked") == 2,
+        r.stdout.replace("\n", " | "))
+    r = rig.sh(sandbox.name, "test -r /etc/opencode/opencode.json && ! touch /etc/opencode/opencode.json 2>/dev/null && echo locked")
+    add("E3", "the agent's lock file can be read and cannot be changed", r.stdout.strip() == "locked", r.stdout.strip() or r.stderr)
+    r = rig.sh(sandbox.name, "command -v submit && command -v opencode")  # one name at a time: dash reports only the first
+    add("E4", "`submit` and `opencode` are on the path", len(r.stdout.split()) == 2, r.stdout.replace("\n", " "))
+    reply = rig.call(sandbox.name, token=None, body=msg(MODEL, "hi"))
+    add("E5", "the gateway refuses a call with no token", reply.get("status") == 401, str(reply.get("status")))
+    r = rig.sh(sandbox.name, "/opt/code-server/bin/code-server --install-extension redhat.vscode-yaml 2>&1 | tail -2",
+               env={"EXTENSIONS_GALLERY": "{}"}, timeout=90)
+    add("E6", "installing an extension is refused", "No extension gallery" in r.stdout, r.stdout.replace("\n", " | "))
+    r = rig.sh(sandbox.name, "test ! -e /opt/code-server/lib/vscode/extensions/copilot && echo absent")
+    add("E7", "the built-in Copilot extension is not in the image", r.stdout.strip() == "absent", r.stdout.strip())
+    r = rig.sh(sandbox.name, "grep -c '\"chat.disableAIFeatures\": true' $HOME/.local/share/code-server/User/settings.json")
+    add("E8", "the editor's settings were put in place", r.stdout.strip() == "1", r.stdout.strip() or r.stderr)
+    return checks
+
+
+def editor_preflight(image: str) -> str | None:
+    """What would stop a session from starting, in one line. None when all is well."""
+    try:
+        if docker("info", check=False, timeout=30).returncode != 0:
+            return "Docker is not running. Start Docker Desktop and try again."
+    except (RigError, FileNotFoundError):
+        return "Docker is not running or is not installed."
+    try:
+        if subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=30).returncode != 0:
+            return "Ollama is not running. Start it and try again."
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return "Ollama is not running or is not installed."
+    if docker("image", "inspect", image, check=False).returncode != 0:
+        return f"The image {image} does not exist. Build it with: uv run python spikes/sandbox/rig.py build-editor"
+    return None
+
+
+def editor_session(image: str, port: int, minutes: int, max_requests: int) -> int:
+    """One candidate session you can open in a browser: the editor, the terminal with the agent, the
+    gateway and the local model. It runs until a key is pressed, `minutes` pass or a STOP file appears."""
+    import secrets
+    import urllib.request
+
+    problem = editor_preflight(image)
+    if problem:
+        say(problem)
+        return 1
+    ensure_model()
+    run_dir = new_run_dir("editor")
+    workspace = export_workspace(run_dir / "workspace")
+    submissions = run_dir / "submissions"
+    submissions.mkdir()
+    from gremlin_assess.container import open_permissions
+    open_permissions(submissions)
+    config_path = run_dir / "config" / "opencode.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(locked_config(hardened=True), indent=2), encoding="utf-8")
+
+    rig = Rig(run_dir, image)
+    run: AgentRun | None = None
+    try:
+        rig.up()
+        sandbox = rig.start_sandbox(AGENT_NAME, workspace=workspace, config=config_path,
+                                    mounts=[(submissions, "/submissions")])
+        token = rig.new_session("S-EDITOR", models=[MODEL], bind=[sandbox.ip], minutes=minutes,
+                                max_requests=max_requests)
+        run = AgentRun(rig, run_dir, sandbox, token, "S-EDITOR")
+        password = secrets.token_urlsafe(12)
+        env_args: list[str] = []
+        for key, value in editor_env(token, password).items():
+            env_args += ["-e", f"{key}={value}"]
+        docker("exec", "-d", "-u", "candidate", "-w", "/workspace", *env_args, sandbox.name,
+               "sh", "-c", f"exec /opt/gassess/bin/start-editor >{EDITOR_LOG} 2>&1")
+
+        def editor_up() -> bool:
+            probe = rig.sh(sandbox.name, f"python -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:{EDITOR_PORT}/healthz', timeout=2)\"",
+                           timeout=15)
+            return probe.returncode == 0
+        wait_until(editor_up, 90, "the editor")
+        results = editor_self_check(rig, sandbox)
+        for c in results:
+            say(f"  {c.id} {'ok  ' if c.ok else 'FAIL'} {c.name}: {c.evidence}")
+        failed = [c for c in results if not c.ok]
+        say(f"Self-check: {len(results) - len(failed)} of {len(results)} passed" + ("" if not failed else "  <-- look at the FAIL lines"))
+        (run_dir / "self-check.json").write_text(json.dumps([c.__dict__ for c in results], indent=2), encoding="utf-8")
+        start_front(rig, sandbox, port)
+        url = f"http://127.0.0.1:{port}/?folder=/workspace"
+
+        def front_up() -> bool:
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=2)
+                return True
+            except OSError:
+                return False
+        wait_until(front_up, 30, "the editor's port on this machine")
+        (run_dir / "editor.json").write_text(json.dumps({"url": url, "password": password, "run_dir": str(run_dir)}),
+                                             encoding="utf-8")
+        say("")
+        say("The session is up. Open this in a browser on this machine:")
+        say(f"    {url}")
+        say(f"    password: {password}")
+        say("")
+        say("In the editor: open BRIEF.md, edit the code under tallybook/, open a terminal (Ctrl+`) and type `opencode`.")
+        say(f"When you are done, run `submit` in the terminal. The archive appears in {submissions}")
+        say(f"The model is the local {BASE_MODEL}, so the assistant will be weak. That is expected.")
+        say(f"Gateway token life: {minutes} minutes, at most {max_requests} model requests.")
+        say(f"To end the session and clean up: press any key here, or press Ctrl+C. It also ends after {minutes} minutes,")
+        say(f"or when a file named STOP appears in {run_dir}")
+        deadline = time.time() + minutes * 60
+        try:
+            while time.time() < deadline and not key_pressed() and not (run_dir / "STOP").exists():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            say("Interrupted. Cleaning up.")
+    finally:
+        if run is not None:
+            try:
+                rig.revoke_session("S-EDITOR")  # the token stops working before anything is copied out
+            except RigError:
+                pass
+            try:
+                log = rig.sh(run.sandbox.name, f"cat {EDITOR_LOG}", timeout=30).stdout
+                (run_dir / "editor.log").write_text(log, encoding="utf-8")
+            except RigError:
+                pass
+            finish_agent_run(run)  # copies the agent's data and the gateway log out, then removes everything
+        else:
+            rig.down()
+    say(f"Everything is in {run_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Spike rig for the sandbox network and agent tests")
     commands = parser.add_subparsers(dest="command", required=True)
+    build = commands.add_parser("build-editor", help="build the sandbox image that has the browser editor")
+    build.add_argument("--base", default=EDITOR_BASE)
+    editor = commands.add_parser("editor", help="start one candidate session that you open in your browser")
+    editor.add_argument("--image", default=EDITOR_IMAGE)
+    editor.add_argument("--port", type=int, default=18443, help="the port on this machine's loopback address")
+    editor.add_argument("--minutes", type=int, default=60, help="how long the session's model token lasts")
+    editor.add_argument("--max-requests", type=int, default=300, help="cap on model requests for the session")
     wiring = commands.add_parser("wiring", help="check the network wiring and the gateway against the local model")
     wiring.add_argument("--image", default="gassess-spike-sbx:oc-2.3.2")
     agent = commands.add_parser("agent", help="OpenCode in the sandbox, through the gateway, to the local model")
@@ -1231,6 +1467,10 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("down", help="remove every container and network this rig made")
     args = parser.parse_args(argv)
 
+    if args.command == "build-editor":
+        return build_editor_image(args.base)
+    if args.command == "editor":
+        return editor_session(args.image, args.port, args.minutes, args.max_requests)
     if args.command == "runs":
         return run_prepared(args.image, args.runs_dir.resolve(), args.minutes)
 
