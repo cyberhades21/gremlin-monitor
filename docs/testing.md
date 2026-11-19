@@ -20,7 +20,7 @@ Expect 204 passed and 12 deselected, with no failures. It takes about two minute
    ```
    The first run pulls `python:3.12-slim` and builds the toy image, so it needs the network. Later runs reuse both.
 
-Expect 12 passed. What each one proves:
+Expect 12 passed, in about a minute once the image is built. What each one proves:
 
 | Test | Proves |
 |---|---|
@@ -32,7 +32,7 @@ Expect 12 passed. What each one proves:
 | `test_an_agent_alone_run_is_graded_in_the_container` | A run folder made by `agent-alone prepare`, which is a git checkout, is graded correctly in a container |
 | `test_the_validator_passes_v2_and_the_graded_checks_in_containers` | The whole validator passes in containers |
 
-If something fails, send me the failing test's output. Things I would expect to go wrong first, because I could not run them:
+These were run on 2026-11-19 and all 12 passed, after one fix (the toy package's test command, see the change log). If one fails on your machine, send me the failing test's output. Things that can differ between machines:
 - A bind mount refused or a "permission denied" inside the container. That is the Windows file sharing setting, or the temp folder path.
 - The build failing on `pip install`. That is the network.
 - `test_the_container_cannot_write_to_a_read_only_mount` looking for the text "Read-only file system". The wording may differ on your Docker version.

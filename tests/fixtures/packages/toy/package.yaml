@@ -23,7 +23,7 @@ environment:
     lockfile: public/repo/requirements.lock
     cache: null
   build_command: null
-  test_command: "pytest -q -p no:cacheprovider --junitxml=junit.xml"
+  test_command: "python -m pytest -q -p no:cacheprovider --junitxml=junit.xml"
   results_format: junit-xml
   editor_extensions: []
   resources: {cpu: 1, memory: 1g}
