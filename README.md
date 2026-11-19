@@ -8,6 +8,7 @@ Internal tooling for the assessment pilot. The specs are in [docs/specs/](docs/s
 |---|---|
 | `docs/specs/` | Specs and decision records |
 | `docs/testing.md` | How to run and try everything yourself |
+| `docs/cofounder-handover.md` | What the co-founder owns in the pilot: jobs, dates, rules, and a draft question for Anthropic |
 | `docs/repo-screening.md` | Checklist for choosing a base repo. Part A is for the co-founder |
 | `docs/spikes/` | Write-ups of the spikes: the agent desk check and the gateway |
 | `spikes/` | Throwaway experiments with their own tests. Never promoted without a rewrite (spec 11) |
