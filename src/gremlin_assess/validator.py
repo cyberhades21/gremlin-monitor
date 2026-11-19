@@ -588,7 +588,7 @@ def validate(
 
     for check_id in CHECKS:
         if check_id not in results:
-            skip(check_id, NOT_RUN_REASON.get(check_id, "not selected for this run"))
+            skip(check_id, "not selected for this run")
 
     return ValidationReport(
         package_id=package.meta.id,

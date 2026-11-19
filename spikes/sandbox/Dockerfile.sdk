@@ -1,0 +1,23 @@
+# Spike image for the second candidate agent: the Claude Agent SDK, which runs the Claude Code binary.
+# Throwaway, never promoted (spec 11).
+#
+# The Python package bundles the binary in its wheel, so pip is the only download, and it happens at
+# build time. D15 still holds: this is a test of how the harness behaves behind our gateway. It is not
+# a decision to ship Claude Code, which needs Anthropic's written agreement.
+ARG BASE
+FROM ${BASE}
+
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep procps iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG SDK_VERSION
+RUN pip install --no-cache-dir "claude-agent-sdk==${SDK_VERSION}" \
+ && python -c "import claude_agent_sdk, pathlib; root = pathlib.Path(claude_agent_sdk.__file__).parent; print('--- bundled files:'); print([str(p.relative_to(root)) for p in root.rglob('*') if p.is_file() and p.stat().st_size > 5_000_000])"
+
+RUN git config --system --add safe.directory '*'
+
+USER candidate
+ENV HOME=/home/candidate
+WORKDIR /workspace

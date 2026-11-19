@@ -43,6 +43,7 @@ BASE_MODEL = "qwen3:4b-instruct"
 MODEL = "gassess-qwen3-4b-16k"  # the pinned model: BASE_MODEL with a 16k context
 SMALL_MODEL = "qwen2.5:1.5b"
 CONTEXT = 16384
+MODEL32 = "gassess-qwen3-4b-32k"  # the Claude Code prompt alone is larger than 16k tokens
 
 
 class RigError(RuntimeError):
@@ -184,6 +185,14 @@ class Rig:
             args += ["-e", f"{key}={value}"]
         return docker(*args, name, "sh", "-c", script, check=False, timeout=timeout)
 
+    def python(self, name: str, code: str, *, env: dict[str, str] | None = None, timeout: float = 120,
+               workdir: str = "/workspace"):
+        """Run a Python script inside a sandbox, fed through standard input."""
+        args = ["exec", "-i", "-u", "candidate", "-w", workdir]
+        for key, value in (env or {}).items():
+            args += ["-e", f"{key}={value}"]
+        return docker(*args, name, "python", "-", check=False, timeout=timeout, stdin=code)
+
     def call(self, name: str, *, token: str | None, body: dict, path: str = "/v1/messages",
              timeout: float = 300) -> dict:
         """One HTTP call to the gateway, made from inside a sandbox with the standard library."""
@@ -247,15 +256,15 @@ def say(text: str = "") -> None:
     print(text, flush=True)
 
 
-def ensure_model() -> None:
-    """Make the pinned model: the small instruct model with a 16k context window."""
+def ensure_model(model: str = MODEL, context: int = CONTEXT) -> None:
+    """Make a pinned model: the small instruct model with the given context window."""
     have = subprocess.run(["ollama", "list"], capture_output=True, text=True).stdout
-    if MODEL in have:
+    if model in have:
         return
-    modelfile = RUNS_DIR / "Modelfile"
+    modelfile = RUNS_DIR / f"Modelfile-{model}"
     modelfile.parent.mkdir(parents=True, exist_ok=True)
-    modelfile.write_text(f"FROM {BASE_MODEL}\nPARAMETER num_ctx {CONTEXT}\n", encoding="utf-8")
-    subprocess.run(["ollama", "create", MODEL, "-f", str(modelfile)], check=True, capture_output=True)
+    modelfile.write_text(f"FROM {BASE_MODEL}\nPARAMETER num_ctx {context}\n", encoding="utf-8")
+    subprocess.run(["ollama", "create", model, "-f", str(modelfile)], check=True, capture_output=True)
 
 
 def new_run_dir(label: str) -> Path:
@@ -424,15 +433,18 @@ AGENT_ENV = {
 }
 
 
-def locked_config(model: str = MODEL, *, custom_model: bool = True) -> dict:
+def locked_config(model: str = MODEL, *, custom_model: bool = True, hardened: bool = False,
+                  context: int = CONTEXT, output: int = 4096) -> dict:
     """The config the candidate cannot edit: our gateway, the pinned model, nothing that reaches out.
 
     With `custom_model` the model is declared here, which a local model needs. Without it the model
-    must already be in OpenCode's own catalog, which is how the real Claude model ids are set up."""
+    must already be in OpenCode's own catalog, which is how the real Claude model ids are set up.
+    With `hardened` the managed file also states its own policies, so that nothing depends on the
+    policy OpenCode derives from `enabled_providers`, which sits before the candidate's own files."""
     provider: dict = {"settings": {"baseURL": GATEWAY_BASE_URL, "apiKey": "{env:ANTHROPIC_API_KEY}"}}
     if custom_model:
-        provider["models"] = {model: {"name": model, "limit": {"context": CONTEXT, "output": 4096}}}
-    return {
+        provider["models"] = {model: {"name": model, "limit": {"context": context, "output": output}}}
+    config = {
         "$schema": "https://opencode.ai/config.json",
         "model": f"anthropic/{model}",
         "update": "disable",
@@ -445,6 +457,26 @@ def locked_config(model: str = MODEL, *, custom_model: bool = True) -> dict:
             {"action": "websearch", "resource": "*", "effect": "deny"},
         ],
     }
+    if hardened:
+        # `integration.use` is deliberately not denied. Found by bisecting: denying it makes the
+        # provider unreachable ("Model unavailable"), so an untouched agent cannot run.
+        config["policies"] = [
+            {"action": "provider.use", "resource": "*", "effect": "deny"},
+            {"action": "provider.use", "resource": "anthropic", "effect": "allow"},
+            *({"action": action, "resource": "*", "effect": "deny"}
+              for action in ("mcp.use", "plugin.use", "websearch.use", "integration.connect", "skill.use")),
+        ]
+    return config
+
+
+# What a candidate might put in their own config to widen the agent's reach.
+CANDIDATE_WIDENING = {
+    "policies": [{"action": action, "resource": "*", "effect": "allow"}
+                 for action in ("mcp.use", "plugin.use", "websearch.use", "skill.use", "provider.use")],
+    "permissions": [{"action": "webfetch", "resource": "*", "effect": "allow"},
+                    {"action": "websearch", "resource": "*", "effect": "allow"}],
+    "mcp": {"evil": {"type": "local", "command": ["sh", "-c", "touch /tmp/mcp-ran; sleep 300"], "enabled": True}},
+}
 
 
 def export_workspace(dest: Path) -> Path:
@@ -572,7 +604,8 @@ class AgentRun:
 
 
 def start_agent_run(image: str, kind: str, *, locked: bool = True, minutes: int = 60, max_requests: int = 400,
-                    label: str | None = None, model: str = MODEL, custom_model: bool = True) -> AgentRun:
+                    label: str | None = None, model: str = MODEL, custom_model: bool = True,
+                    hardened: bool = False, context: int = CONTEXT, output: int = 4096) -> AgentRun:
     ensure_model()
     run_dir = new_run_dir(label or f"agent-{kind}")
     workspace = export_workspace(run_dir / "workspace")
@@ -580,7 +613,9 @@ def start_agent_run(image: str, kind: str, *, locked: bool = True, minutes: int 
     if locked:
         config_path = run_dir / "config" / "opencode.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(locked_config(model, custom_model=custom_model), indent=2), encoding="utf-8")
+        config_path.write_text(
+            json.dumps(locked_config(model, custom_model=custom_model, hardened=hardened, context=context,
+                                     output=output), indent=2), encoding="utf-8")
     rig = Rig(run_dir, image)
     rig.up()
     sandbox = rig.start_sandbox(AGENT_NAME, workspace=workspace, config=config_path)
@@ -604,7 +639,7 @@ def agent_prod_shape(image: str) -> int:
         raise RigError(f"{alias} already exists in Ollama. Not touching it")
     subprocess.run(["ollama", "cp", MODEL, alias], check=True, capture_output=True)
     try:
-        run = start_agent_run(image, "prodshape", model=alias, custom_model=False)
+        run = start_agent_run(image, "prodshape", model=alias, custom_model=False, hardened=True)
         try:
             run.cli("config-sources", "opencode debug config")
             run.cli("tiny", f"timeout 300 opencode run --standalone --auto --format json "
@@ -623,7 +658,8 @@ def agent_prod_shape(image: str) -> int:
 
 
 def finish_agent_run(run: AgentRun) -> None:
-    for remote, local in (("/home/candidate/.local/share/opencode", "data"), ("/home/candidate/.config/opencode", "config-home")):
+    for remote, local in (("/home/candidate/.local/share/opencode", "data"), ("/home/candidate/.config/opencode", "config-home"),
+                          ("/home/candidate/.claude", "claude-home")):
         pull_dir(run.rig, run.sandbox.name, remote, run.run_dir / local)
     try:
         diff = run.rig.sh(run.sandbox.name,
@@ -691,6 +727,425 @@ def agent_override(image: str) -> int:
     return 0
 
 
+def agent_override2(image: str) -> int:
+    """Can the candidate's own config widen the agent's reach: re-allow web tools, MCP servers, other providers?
+
+    The control has no managed file. It carries the provider settings in the candidate's own file next to
+    the widening, so the agent still reaches the gateway and the difference shows in what it does."""
+    summary = {}
+    for variant in ("locked", "control"):
+        say(f"--- {variant}: widening config in the candidate's own file, managed file {'present' if variant == 'locked' else 'absent'}")
+        run = start_agent_run(image, f"override2-{variant}", locked=(variant == "locked"), minutes=20,
+                              max_requests=40, hardened=True)
+        try:
+            user = dict(CANDIDATE_WIDENING)
+            if variant == "control":
+                user.update({k: v for k, v in locked_config(hardened=False).items() if k != "$schema"})
+            payload = json.dumps(user)
+            run.rig.sh(run.sandbox.name,
+                       f"mkdir -p ~/.config/opencode && cat > ~/.config/opencode/opencode.json <<'EOF'\n{payload}\nEOF\n",
+                       timeout=30)
+            run.cli("sources", "opencode debug config")
+            run.cli("tiny", f"timeout 200 opencode run --standalone --auto --format json --model anthropic/{MODEL} "
+                            "'Reply with the single word: ready'", timeout=230)
+            time.sleep(2)
+            probe = run.rig.sh(run.sandbox.name, "ls /tmp/mcp-ran 2>&1; pgrep -fa 'sleep 300' || echo no-mcp-process",
+                               timeout=30)
+            rows = run.rows()
+            tools = sorted({t for r in rows for t in r["tools"]})
+            ran = "mcp-ran" in probe.stdout and "No such file" not in probe.stdout
+            summary[variant] = {"mcp_server_started": ran, "tools_in_requests": tools, "requests": len(rows)}
+            say(f"  the MCP server {'WAS started' if ran else 'was not started'}; tools sent to the model: {tools}")
+        finally:
+            finish_agent_run(run)
+    say("")
+    for variant, data in summary.items():
+        say(f"{variant:8} {data}")
+    return 0
+
+
+def agent_compaction(image: str, minutes: int = 8) -> int:
+    """Make OpenCode compact its context: a tiny declared context limit, then the V7 prompt.
+
+    Shows the hidden compaction request, and which model it asks for."""
+    run = start_agent_run(image, "compaction", minutes=minutes + 10, max_requests=300, hardened=True,
+                          context=7000, output=1024)
+    try:
+        result = run.cli("task", f"timeout {minutes * 60} opencode run --standalone --auto --format json "
+                                 f"--model anthropic/{MODEL} '{AGENT_PROMPT}'", timeout=minutes * 60 + 60)
+        export_sessions(run)
+        rows = run.rows()
+        say(f"The command ended with exit {result['exit']}. The gateway saw {len(rows)} requests:")
+        print_rows(rows)
+        say("Requests that carry no tools (the title, summary and compaction calls):")
+        for r in rows:
+            if not r["tools"]:
+                say(f"  {r['id']}: model {r['model']}, max_tokens {r['max_tokens']}, system {r['system_chars']} chars, "
+                    f"{r['messages']} messages, status {r['status']}")
+                say(f"      first message: {r['first_user'][:130]}")
+        kinds: dict[str, int] = {}
+        for line in result["stdout"].splitlines():
+            if line.startswith("{"):
+                try:
+                    kinds[json.loads(line).get("type", "?")] = kinds.get(json.loads(line).get("type", "?"), 0) + 1
+                except json.JSONDecodeError:
+                    pass
+        say(f"Event types in the output: {kinds}")
+    finally:
+        finish_agent_run(run)
+    say(f"Everything is in {run.run_dir}")
+    return 0
+
+
+# Drives OpenCode's interactive terminal UI in a pseudo-terminal, as a candidate's terminal would.
+TUI_SCRIPT = r'''
+import fcntl, os, pty, re, select, struct, termios, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir("/workspace")
+    os.environ["TERM"] = "xterm-256color"
+    os.execvp("opencode", ["opencode", "--standalone"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+ANSI = re.compile(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1b[=>]")
+buf = b""
+answered = {"cursor": 0, "attributes": 0, "colour": 0}
+def pump(seconds):
+    global buf
+    end = time.time() + seconds
+    while time.time() < end:
+        ready, _, _ = select.select([fd], [], [], 0.3)
+        if not ready:
+            continue
+        try:
+            data = os.read(fd, 65536)
+        except OSError:
+            return False
+        if not data:
+            return False
+        buf += data
+        # A real terminal answers these questions. Without it the UI may wait for ever.
+        if b"\x1b[6n" in data:
+            os.write(fd, b"\x1b[1;1R"); answered["cursor"] += 1
+        if b"\x1b[c" in data or b"\x1b[0c" in data:
+            os.write(fd, b"\x1b[?62;c"); answered["attributes"] += 1
+        if b"\x1b]11;?" in data:
+            os.write(fd, b"\x1b]11;rgb:0000/0000/0000\x07"); answered["colour"] += 1
+        if b"\x1b]10;?" in data:
+            os.write(fd, b"\x1b]10;rgb:ffff/ffff/ffff\x07"); answered["colour"] += 1
+    return True
+alive = pump(12)
+startup = len(buf)
+os.write(fd, b"Reply with the single word: ready")
+time.sleep(0.5)
+os.write(fd, b"\r")
+alive = pump(45) and alive
+text = ANSI.sub(b"", buf).decode("utf-8", "replace")
+flat = re.sub(r"\s+", " ", text)
+print("alive at the end:", alive)
+print("bytes drawn during startup:", startup, "| in total:", len(buf), "| terminal questions answered:", answered)
+print("prompt text appears on screen:", "Reply with the single word" in flat)
+print("last 500 visible characters:", flat[-500:])
+for _ in range(2):
+    try:
+        os.write(fd, b"\x03")
+    except OSError:
+        break
+    time.sleep(0.5)
+try:
+    os.kill(pid, 9)
+except OSError:
+    pass
+'''
+
+
+def agent_tui(image: str) -> int:
+    """The interactive terminal UI, which is what a candidate uses, started with no route out."""
+    run = start_agent_run(image, "tui", minutes=15, max_requests=60, hardened=True)
+    try:
+        env = {"ANTHROPIC_API_KEY": run.token, **AGENT_ENV}
+        started = time.time()
+        result = run.rig.python(run.sandbox.name, TUI_SCRIPT, env=env, timeout=150)
+        say(f"TUI session took {time.time() - started:.0f}s, exit {result.returncode}")
+        say(result.stdout.rstrip())
+        if result.stderr.strip():
+            say("stderr: " + result.stderr.strip()[-400:])
+        (run.run_dir / "tui.out").write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
+        rows = run.rows()
+        say(f"What the gateway saw ({len(rows)} requests):")
+        print_rows(rows)
+        for r in rows[:3]:
+            say(f"  request {r['id']}: user agent {r['user_agent']}, tools {len(r['tools'])}, first message {r['first_user'][:90]}")
+    finally:
+        finish_agent_run(run)
+    say(f"Everything is in {run.run_dir}")
+    return 0
+
+
+# Drives the Agent SDK, which runs the Claude Code binary, the way a harness of ours would.
+SDK_SCRIPT = r'''
+import asyncio, json, os, time
+from claude_agent_sdk import ClaudeAgentOptions, query
+
+async def main():
+    options = ClaudeAgentOptions(
+        cwd="/workspace",
+        model=os.environ["PIN"],
+        permission_mode="bypassPermissions",
+        disallowed_tools=["WebSearch", "WebFetch"],
+        setting_sources=[],
+        max_turns=int(os.environ.get("MAX_TURNS", "3")),
+    )
+    started = time.time()
+    count = 0
+    async for message in query(prompt=os.environ["PROBE_PROMPT"], options=options):
+        count += 1
+        print(json.dumps({"t": round(time.time() - started, 1), "kind": type(message).__name__,
+                          "text": repr(message)[:600]}), flush=True)
+    print(json.dumps({"done": True, "messages": count, "seconds": round(time.time() - started, 1)}), flush=True)
+
+asyncio.run(main())
+'''
+
+
+def agent_sdk(image: str) -> int:
+    """The Agent SDK harness behind the gateway: which requests and models, and what it does offline."""
+    ensure_model(MODEL32, 32768)
+    run = start_agent_run(image, "sdk", locked=False, model=MODEL32, minutes=40, max_requests=200)
+    try:
+        base = {
+            "ANTHROPIC_BASE_URL": f"http://{GW_ALIAS}:{GW_PORT}", "ANTHROPIC_API_KEY": run.token,
+            "ANTHROPIC_MODEL": MODEL32, "PIN": MODEL32,
+            "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1", "DISABLE_AUTOUPDATER": "1",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CONFIG_DIR": "/home/candidate/.claude",
+            "PROBE_PROMPT": "Reply with the single word: ready", "MAX_TURNS": "3",
+        }
+        variants = {
+            "main-model-only": base,
+            "all-models-pinned": {**base, "ANTHROPIC_DEFAULT_HAIKU_MODEL": MODEL32, "ANTHROPIC_DEFAULT_SONNET_MODEL": MODEL32,
+                                  "ANTHROPIC_DEFAULT_OPUS_MODEL": MODEL32, "CLAUDE_CODE_SUBAGENT_MODEL": MODEL32},
+        }
+        for name, env in variants.items():
+            before = len(run.rows())
+            started = time.time()
+            result = run.rig.python(run.sandbox.name, SDK_SCRIPT, env=env, timeout=420)
+            took = time.time() - started
+            (run.run_dir / f"sdk-{name}.out").write_text(result.stdout + "\n--- stderr\n" + result.stderr, encoding="utf-8")
+            rows = run.rows()[before:]
+            say(f"--- {name}: exit {result.returncode} in {took:.0f}s, {len(rows)} requests reached the gateway")
+            lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
+            say(f"    {len(lines)} messages from the SDK; last: {lines[-1][:300] if lines else '(none)'}")
+            if result.stderr.strip():
+                say("    stderr: " + result.stderr.strip()[-500:])
+            print_rows(rows)
+            models = sorted({str(r["model"]) for r in rows})
+            say(f"    models requested: {models}")
+            for r in rows[:6]:
+                say(f"    request {r['id']}: {r['path']} | ua {r['user_agent']} | status {r['status']} | tools {len(r['tools'])} "
+                    f"| beta {r['anthropic_beta']} | first message {r['first_user'][:70]}")
+        stray = run.rig.gateway_log("_unauthenticated")
+        say(f"Requests the gateway could not attribute to a session: {len(stray)}")
+        for record in stray[:6]:
+            say(f"    {record.get('method')} {record.get('path')} {record.get('status', '')}")
+    finally:
+        finish_agent_run(run)
+    say(f"Everything is in {run.run_dir}")
+    return 0
+
+
+def agent_matrix(image: str) -> int:
+    """The hardened managed config against each kind of widening on its own, then all together.
+
+    The first variant has no widening at all. If it fails, the hardened config itself is wrong."""
+    variants = {
+        "none": {},
+        "permissions-only": {"permissions": CANDIDATE_WIDENING["permissions"]},
+        "policies-without-provider": {
+            "policies": [p for p in CANDIDATE_WIDENING["policies"] if p["action"] != "provider.use"]},
+        "provider-allow-all": {"policies": [{"action": "provider.use", "resource": "*", "effect": "allow"}]},
+        "mcp-only": {"mcp": CANDIDATE_WIDENING["mcp"]},
+        "all": CANDIDATE_WIDENING,
+    }
+    run = start_agent_run(image, "matrix", minutes=30, max_requests=80, hardened=True)
+    outcome = {}
+    try:
+        for name, widening in variants.items():
+            run.rig.sh(run.sandbox.name, "rm -f /tmp/mcp-ran ~/.config/opencode/opencode.json; pkill -f 'sleep 300' || true",
+                       timeout=30)
+            if widening:
+                payload = json.dumps(widening)
+                run.rig.sh(run.sandbox.name,
+                           f"mkdir -p ~/.config/opencode && cat > ~/.config/opencode/opencode.json <<'EOF'\n{payload}\nEOF\n",
+                           timeout=30)
+            before = len(run.rows())
+            result = run.cli(f"matrix-{name}", f"timeout 200 opencode run --standalone --auto --format json "
+                                               f"--model anthropic/{MODEL} 'Reply with the single word: ready'", timeout=230)
+            time.sleep(2)
+            probe = run.rig.sh(run.sandbox.name, "ls /tmp/mcp-ran 2>&1", timeout=30)
+            rows = run.rows()[before:]
+            error = ""
+            for line in result["stdout"].splitlines():
+                if line.startswith("{") and '"type":"error"' in line.replace(" ", ""):
+                    error = json.loads(line).get("error", {}).get("message", "")
+            outcome[name] = {
+                "exit": result["exit"], "requests": len(rows),
+                "mcp_server_started": "No such file" not in probe.stdout,
+                "tools": sorted({t for r in rows for t in r["tools"]}), "error": error,
+            }
+            say(f"  {name:28} exit {outcome[name]['exit']}, {outcome[name]['requests']} requests, "
+                f"mcp started {outcome[name]['mcp_server_started']}, tools {len(outcome[name]['tools'])}"
+                + (f", error: {error}" if error else ""))
+        (run.run_dir / "matrix.json").write_text(json.dumps(outcome, indent=2), encoding="utf-8")
+    finally:
+        finish_agent_run(run)
+    return 0
+
+
+def agent_policy_bisect(image: str) -> int:
+    """Which deny rule in the hardened managed config stops an untouched agent from reaching its model?"""
+    ensure_model()
+    run_dir = new_run_dir("policy-bisect")
+    workspace = export_workspace(run_dir / "workspace")
+    pair = [{"action": "provider.use", "resource": "*", "effect": "deny"},
+            {"action": "provider.use", "resource": "anthropic", "effect": "allow"}]
+    extras = ["mcp.use", "plugin.use", "websearch.use", "integration.connect", "integration.use", "skill.use"]
+    variants: dict[str, list[dict]] = {"no explicit policies": [], "provider pair only": pair}
+    for action in extras:
+        variants[f"pair + deny {action}"] = pair + [{"action": action, "resource": "*", "effect": "deny"}]
+    variants["pair + all six"] = pair + [{"action": a, "resource": "*", "effect": "deny"} for a in extras]
+    rig = Rig(run_dir, image)
+    rig.up()
+    results = {}
+    try:
+        for index, (name, policies) in enumerate(variants.items()):
+            config = locked_config(MODEL, custom_model=True, hardened=False)
+            if policies:
+                config["policies"] = policies
+            path = run_dir / "config" / f"cfg-{index}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            sandbox_name = f"gassess-spike-bisect{index}"
+            sandbox = rig.start_sandbox(sandbox_name, workspace=workspace, config=path)
+            token = rig.new_session(f"S-B{index}", models=[MODEL], bind=[sandbox.ip], minutes=15, max_requests=20)
+            result = rig.sh(sandbox_name, f"timeout 120 opencode run --standalone --auto --format json "
+                                          f"--model anthropic/{MODEL} 'Reply with the single word: ready'",
+                            env={"ANTHROPIC_API_KEY": token, **AGENT_ENV}, timeout=150)
+            error = ""
+            for line in result.stdout.splitlines():
+                if line.startswith("{") and '"type":"error"' in line.replace(" ", ""):
+                    error = json.loads(line).get("error", {}).get("message", "")
+            requests = len([r for r in rig.gateway_log(f"S-B{index}") if r.get("event") == "request"])
+            results[name] = {"exit": result.returncode, "requests": requests, "error": error}
+            say(f"  {name:36} exit {result.returncode}, {requests} requests" + (f", error: {error}" if error else ""))
+            docker("rm", "-f", sandbox_name, check=False)
+        (run_dir / "bisect.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    finally:
+        rig.down()
+    return 0
+
+
+def classify_end(exit_code: int, events: list[dict], rows: list[dict]) -> str:
+    """Map how an OpenCode run ended onto the values `run.yaml` accepts."""
+    if any(r["status"] in (403, 429) for r in rows):
+        return "token_limit"
+    tail = events[-4:]
+    if exit_code == 124:
+        return "error" if any(e.get("type") == "retry" for e in tail) else "time_limit"
+    if exit_code != 0:
+        return "error"
+    finishes = [e for e in events if e.get("type") == "step_finish"]
+    if finishes and finishes[-1].get("part", {}).get("reason") == "stop":
+        return "agent_stopped"
+    return "error"
+
+
+def run_prepared(image: str, runs_dir: Path, minutes: int) -> int:
+    """Run the agent in every run folder that `gassess agent-alone|audit prepare` made, and fill in what it left."""
+    import shlex
+
+    import yaml
+
+    from gremlin_assess.container import open_permissions
+
+    prepared = json.loads((runs_dir / "prepared.json").read_text(encoding="utf-8"))
+    ensure_model()
+    rig_dir = new_run_dir(f"runs-{prepared['kind']}")
+    config_path = rig_dir / "config" / "opencode.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(locked_config(MODEL, custom_model=True, hardened=True), indent=2), encoding="utf-8")
+    rig = Rig(rig_dir, image)
+    rig.up()
+    failures = 0
+    try:
+        for number in range(1, prepared["runs"] + 1):
+            run = runs_dir / f"run-{number}"
+            say(f"--- run {number} of {prepared['runs']} ({prepared['kind']})")
+            open_permissions(run / "workspace")
+            name = f"gassess-spike-run{number}"
+            session = f"S-RUN{number}"
+            sandbox = rig.start_sandbox(name, workspace=(run / "workspace").resolve(), config=config_path)
+            token = rig.new_session(session, models=[MODEL], bind=[sandbox.ip], minutes=minutes + 10, max_requests=500)
+            env = {"ANTHROPIC_API_KEY": token, **AGENT_ENV}
+            started = time.time()
+            result = rig.sh(
+                name, f"timeout {minutes * 60} opencode run --standalone --auto --format json "
+                      f"--model anthropic/{MODEL} {shlex.quote(prepared['prompt'])}",
+                env=env, timeout=minutes * 60 + 90,
+            )
+            duration = (time.time() - started) / 60
+            transcript = run / "transcript"
+            transcript.mkdir(exist_ok=True)
+            (transcript / "events.jsonl").write_text(result.stdout, encoding="utf-8")
+            (transcript / "stderr.txt").write_text(result.stderr, encoding="utf-8")
+            listing = rig.sh(name, "timeout 60 opencode session list --standalone", env=env, timeout=90).stdout
+            session_ids = [line.split()[0] for line in listing.splitlines() if line.startswith("ses_")]
+            reported_model, cost = None, 0.0
+            for index, session_id in enumerate(session_ids):
+                exported = rig.sh(name, f"timeout 90 opencode session export {session_id} --standalone", env=env,
+                                  timeout=120).stdout
+                (transcript / f"session-{index}.json").write_text(exported, encoding="utf-8")
+                try:
+                    info = json.loads(exported).get("info", {})
+                    reported_model = reported_model or info.get("model", {}).get("id")
+                    cost += float(info.get("cost") or 0)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            pull_dir(rig, name, "/home/candidate/.local/share/opencode/log", transcript / "agent-log")
+            records = rig.gateway_log(session)
+            (transcript / "gateway.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+            rows = summarise_log(records)
+            events = []
+            for line in result.stdout.splitlines():
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            ended_by = classify_end(result.returncode, events, rows)
+            meta = {
+                "agent_config": prepared["agent_config"],
+                "model": reported_model,
+                "ended_by": ended_by,
+                "duration_minutes": round(duration, 2),
+                "input_tokens": sum(r["input_tokens"] or 0 for r in rows),
+                "output_tokens": sum(r["output_tokens"] or 0 for r in rows),
+                "cost_usd": round(cost, 5),
+                "notes": f"OpenCode {image.rsplit('-', 1)[-1]} on a local model through the gateway. Tokens are the "
+                         "gateway's count and include the title call. Cost is OpenCode's own figure, which leaves "
+                         "that call out, and a local model has no price.",
+            }
+            (run / "run.yaml").write_text(yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
+            say(f"  exit {result.returncode}, {duration:.1f} min, ended_by {ended_by}, {len(rows)} requests, "
+                f"{meta['input_tokens']} in / {meta['output_tokens']} out tokens")
+            rig.revoke_session(session)
+            docker("rm", "-f", name, check=False)
+            if ended_by == "error":
+                failures += 1
+    finally:
+        rig.down()
+    say(f"Done. {failures} run(s) ended in error. Gateway logs are in {rig_dir}")
+    return 0
+
+
 def agent_task(image: str, minutes: int) -> int:
     """The V7-style run: the agent alone, given only the standard prompt, with a time limit."""
     run = start_agent_run(image, "task", minutes=minutes + 10, max_requests=500)
@@ -721,23 +1176,44 @@ def main(argv: list[str] | None = None) -> int:
     wiring = commands.add_parser("wiring", help="check the network wiring and the gateway against the local model")
     wiring.add_argument("--image", default="gassess-spike-sbx:oc-2.3.2")
     agent = commands.add_parser("agent", help="OpenCode in the sandbox, through the gateway, to the local model")
-    agent.add_argument("experiment", choices=["probe", "override", "task", "prod-shape"])
-    agent.add_argument("--image", default="gassess-spike-sbx:oc-2.3.2")
+    agent.add_argument("experiment", choices=["probe", "override", "override2", "matrix", "bisect", "task",
+                                              "prod-shape", "compaction", "tui", "sdk"])
+    agent.add_argument("--image", default=None, help="default: the OpenCode image, or the SDK image for `sdk`")
     agent.add_argument("--minutes", type=int, default=15, help="time limit for the task experiment")
+    runs = commands.add_parser("runs", help="run the agent in every folder `gassess agent-alone|audit prepare` made")
+    runs.add_argument("runs_dir", type=Path)
+    runs.add_argument("--image", default="gassess-spike-sbx:oc-2.3.2")
+    runs.add_argument("--minutes", type=int, default=8, help="time limit per run")
     commands.add_parser("down", help="remove every container and network this rig made")
     args = parser.parse_args(argv)
+
+    if args.command == "runs":
+        return run_prepared(args.image, args.runs_dir.resolve(), args.minutes)
 
     if args.command == "down":
         Rig(new_run_dir("down"), "unused").down(keep_logs=False)
         return 0
     if args.command == "agent":
+        image = args.image or ("gassess-spike-sdk:0.2.185" if args.experiment == "sdk" else "gassess-spike-sbx:oc-2.3.2")
         if args.experiment == "probe":
-            return agent_probe(args.image)
+            return agent_probe(image)
         if args.experiment == "override":
-            return agent_override(args.image)
+            return agent_override(image)
+        if args.experiment == "override2":
+            return agent_override2(image)
+        if args.experiment == "matrix":
+            return agent_matrix(image)
+        if args.experiment == "bisect":
+            return agent_policy_bisect(image)
+        if args.experiment == "compaction":
+            return agent_compaction(image, args.minutes)
+        if args.experiment == "tui":
+            return agent_tui(image)
+        if args.experiment == "sdk":
+            return agent_sdk(image)
         if args.experiment == "prod-shape":
-            return agent_prod_shape(args.image)
-        return agent_task(args.image, args.minutes)
+            return agent_prod_shape(image)
+        return agent_task(image, args.minutes)
     return run_wiring(args.image)
 
 

@@ -167,10 +167,30 @@ With sessions graded and reviewer forms saved in `pilot\reviews\` next to `assig
 uv run gassess analyze $pilot --packages path\to\folder\holding\packages --out gate1a.md
 ```
 
+## 8. Try a real agent in a sandbox with a local model (Docker and Ollama, no key, no cost)
+
+This is the spike rig in `spikes/sandbox/`. It puts a sandbox on a Docker network with no route out, with the gateway as its only way to a model, and your Ollama behind the gateway. The agent is OpenCode 2.3.2. The write-up is `docs/spikes/01-opencode-hands-on.md`. A small local model is far weaker than Claude, so this checks plumbing and what the agent does, not how hard a problem is.
+
+```
+ollama pull qwen3:4b-instruct
+uv run gassess build-image tests/fixtures/packages/toy        # prints the image tag, call it <tag>
+docker build -t gassess-spike-sbx:oc-2.3.2 --build-arg BASE=<tag> --build-arg OPENCODE_VERSION=2.3.2 `
+  --build-arg OPENCODE_ASSET=opencode-linux-x64.tar.gz `
+  --build-arg OPENCODE_SHA256=563b5d663637226b6e3bb4bb6803281bc39b0d2cd88db06d674b6420aab009b0 spikes/sandbox
+uv run python spikes/sandbox/rig.py wiring          # expect: 18 of 18 checks passed
+uv run python spikes/sandbox/rig.py agent matrix    # expect: six variants, each exit 0, 2 requests, mcp started False, tools 10
+```
+
+The first call loads the model, so `wiring` takes a minute or two. Both commands clean up their containers and networks. If one is interrupted, `uv run python spikes/sandbox/rig.py down` removes them. Results and the gateway's logs go to `pilot/spikes/sandbox/`, which is outside git, because the logs hold every prompt and response.
+
+Other experiments: `agent probe` (startup and one tiny prompt), `agent override` (candidate config against the locked one, with a control), `agent bisect` (which managed deny rule breaks the agent), `agent task` (the V7 prompt for up to `--minutes`), and `agent prod-shape` (see the request shape for the real `claude-opus-5-5` id, which makes a temporary local alias of that name and removes it afterwards).
+
+To rehearse V7 and V8 with this agent, make the run folders as in section 5 on a copy of the toy package, then fill them with `uv run python spikes/sandbox/rig.py runs <runs-dir> --minutes 8` and grade with `gassess agent-alone grade <pkg> <runs-dir> --image <tag>`. Expect V7 `pass` (a small model fixes nothing) and V8 `not_run` or `pass`, depending on what the agent wrote.
+
 ## What is not built yet
 
-- The pilot VM, its network allowlist to the model API, the code-server layer in the image, installing the agent (OpenCode) and the terminal recorder.
-- The agent that makes the runs for V7 and V8. The checks themselves are built and read the runs you record, but no agent is installed or scripted yet. That waits for the agent choice (spike 1).
-- The spikes in `docs/specs/11-spike-plan.md`.
+- The pilot VM, its network allowlist to the model API, the code-server layer in the image and the terminal recorder. OpenCode is installed in a spike image and runs through the gateway (section 8), but nothing here has run against the real model API.
+- A runner for V7 and V8 that is not spike code. `rig.py runs` fills the run folders for OpenCode, and a real one belongs in `src/` behind an agent interface.
+- The remaining spikes in `docs/specs/11-spike-plan.md`. Spike 1's hands-on part is done for OpenCode only, and against a local model.
 - Real problem packages. Only the toy fixture exists.
 - The consent copy, data note, survey and reviewer form wording, which your co-founder drafts.
