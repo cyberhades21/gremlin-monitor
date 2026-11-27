@@ -1,0 +1,26 @@
+# Extensions installed in every session, whatever the repo. One publisher.name@version per line, all from
+# Open VSX (the marketplace code-server uses). Lower case. Versions are pinned so a rebuild gives the same
+# editor. To change the list, edit this file and run `docker compose build`.
+
+# Any repo
+editorconfig.editorconfig@0.18.2
+usernamehw.errorlens@3.30.0
+pkief.material-icon-theme@5.40.0
+gruntfuggly.todo-tree@0.0.215
+mhutchie.git-graph@1.30.0
+redhat.vscode-yaml@2.1.2026112008
+tamasfe.even-better-toml@0.21.2
+
+# Activity monitoring: sends file, line and save events to our own Wakapi server. See README.
+wakatime.vscode-wakatime@30.2.1
+
+# JavaScript and TypeScript (editing and navigation are built into VS Code)
+esbenp.prettier-vscode@12.4.0
+dbaeumer.vscode-eslint@3.0.34
+
+# Python. Pylance is Microsoft-only and not on Open VSX, so basedpyright gives the code navigation.
+ms-python.python@2026.10.0
+ms-python.debugpy@2026.6.0
+ms-python.vscode-python-envs@1.44.0
+detachhead.basedpyright@1.40.2
+charliermarsh.ruff@2026.98.0
