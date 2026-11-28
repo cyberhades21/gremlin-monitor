@@ -9,12 +9,13 @@ sandbox: give the candidate the link and password.
 docker compose up --build
 ```
 
-This starts seven services:
+This starts eight services:
 
 - `wakapi-init` and `wakapi-setup` run once: a random salt for Wakapi, then this session's own Wakapi user
   and key.
 - `wakapi` stores the activity events.
-- `ingest` is the editor's only door to Wakapi (see "Keeping sessions apart").
+- `collector` keeps the changes handed in with `submit` (see "Submitting").
+- `ingest` is the editor's only door to both (see "Keeping sessions apart").
 - `egress` is the editor's only way to the internet (see "Outside traffic").
 - `editor` is the code-server with the repo.
 - `edge` is the front door that shows the consent page first (see "The consent page").
@@ -34,8 +35,9 @@ REPO_URL=https://github.com/owner/repo docker compose up
 
 In PowerShell use `$env:REPO_URL = "https://github.com/owner/repo"` first, or put the values in a `.env`
 file (see `.env.example`). `REPO_REF` picks a branch or commit, `PASSWORD` sets the password, `PORT`
-changes the port. `docker compose down` throws away the candidate's work (the activity data in Wakapi is
-kept); a plain restart keeps everything. `docker compose down -v` also wipes the Wakapi data.
+changes the port. `docker compose down` throws away the candidate's work, so run `submit` first (the submitted
+changes and the activity data in Wakapi are kept); a plain restart keeps everything. `docker compose down -v`
+also wipes the submissions and the Wakapi data.
 
 - Put `PASSWORD` in `.env` rather than on the command line. Any later `docker compose` command that recreates
   the editor without it makes a new random password.
@@ -70,9 +72,19 @@ so treat the data as evidence that something happened, not proof that something 
 - **Sessions:** each session is one Wakapi user, `s-<SESSION_ID>` (default session name `editor`; lowercase
   letters, digits and dashes). The editor also reports under that name as its machine name. To add a session's
   user and key on its own: `docker compose run --rm --no-deps -e SESSION_ID=two wakapi-setup`.
-- **End of a session:** run `docker compose exec editor wakatime-cli --sync-offline-activity 0` to send the
-  command-line tool's queue. The extension holds the newest events in memory until its next event, so the
-  last half minute of a session can be missing.
+- **Events arrive late, by up to about three minutes.** In a test session the delay was 1 to 167 seconds
+  (typically over a minute): the extension holds events until its next one, and the command-line tool queues
+  them. So the end of a session is only complete after `submit` (see "Submitting"). `docker compose down`
+  without it can lose the last few minutes.
+- **What the numbers do not mean** (seen in that test session):
+  - Pasted lines count as typed: a 30-line paste showed as 31 typed lines. "Typed" is the net change in lines,
+    so deleting counts as negative.
+  - Changes made from the terminal, by a script or by an agent, are not recorded, nor are commands, searches,
+    git operations or scrolling.
+  - A file that is renamed or deleted soon after leaves no trace of the earlier work in it, and creating a new
+    file and typing in it left none when it was renamed shortly after.
+  - The branch name is read when the event is sent, not when it happened, so it can be wrong around a branch
+    switch.
 - **AI lines:** `ai_line_changes` stays 0 for our setup. The extension only detects AI from in-editor AI
   features (switched off here), and an agent editing files from the terminal is not counted as AI.
 - **Without Wakapi** (for example a plain `docker run`), the extension is switched off in `~/.wakatime.cfg`
@@ -83,6 +95,34 @@ so treat the data as evidence that something happened, not proof that something 
   with new data. If you ran an earlier version (a fixed salt, or one shared Wakapi user), run
   `docker compose down -v` once.
 - **Before real use:** have the consent text approved (see below).
+
+## Submitting
+
+When the candidate is done they type `submit` in the editor's terminal. The interviewer can do the same:
+
+```
+docker compose exec editor submit
+```
+
+It saves everything changed since the project was cloned (their commits, uncommitted edits, new and deleted
+files) as one diff, then sends the last of the activity record, which takes about half a minute. The browser
+window has to still be open for that last part. Submitting again saves another copy; nothing is overwritten.
+
+Read the submissions (they survive `docker compose down`, not `down -v`):
+
+```
+docker compose cp collector:/submissions ./logs/submissions
+```
+
+Each file starts with a short header (session, time, starting commit, files changed) and can be applied to a
+fresh clone of that commit with `git apply`.
+
+- **Not in the diff:** files the project ignores (installed packages, caches) and the contents of binary files.
+  Changes larger than 5 MB are refused, and `submit` says so.
+- **It is evidence, not proof.** The candidate controls their environment and could hand in something other
+  than what is in the folder.
+- **How it gets out:** `submit` sends it through `ingest` with the session's key, to `collector`
+  (`collector.py`), which the editor cannot otherwise reach and cannot read back from.
 
 ## Keeping sessions apart
 
@@ -96,10 +136,11 @@ another user's heartbeats, and write into their record, just by naming that user
 
 - Wakapi is not on the editor's network. Its dashboard, sign-up and settings (which can relay or import data
   to and from addresses the user types) are out of the candidate's reach.
-- The door passes exactly two requests: `POST /api/users/current/heartbeats.bulk` (and `.../heartbeats`) to send
-  events, and `GET /api/users/current/statusbar/today` for the coding-time counter in the status bar. In those,
-  `current` means whoever owns the key, so a request can only touch the sender's own record. Naming another
-  user, any other path, other methods, and bodies over 1 MB are refused.
+- The door passes exactly three requests: `POST /api/users/current/heartbeats.bulk` (and `.../heartbeats`) to
+  send events, `GET /api/users/current/statusbar/today` for the coding-time counter in the status bar, and
+  `POST /submit` to hand in changes. `current` means whoever owns the key, and a submission is filed under the
+  session whose key it carries, so a request can only touch the sender's own record. Naming another user, any
+  other path, other methods, and oversized bodies are refused.
 - **Do not add another route from the editor to Wakapi.** Without the door, any key can read and write any
   user.
 

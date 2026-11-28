@@ -1,7 +1,7 @@
-# Between the editor and Wakapi. The editor may send its own activity events and read its own
-# coding-time counter (the one in the status bar), and nothing else: no dashboard, no sign-up,
-# no settings, no way to read anyone's data. Wakapi itself is not on the editor's network, so
-# this is the only door.
+# Between the editor and what stores a session's record. The editor may send its own activity
+# events, read its own coding-time counter (the one in the status bar) and hand in its changes
+# (`submit`), and nothing else: no dashboard, no sign-up, no settings, no way to read anyone's
+# data. Neither Wakapi nor the collector is on the editor's network, so this is the only door.
 {
 	admin off
 	auto_https off
@@ -15,6 +15,17 @@
 	@counter {
 		method GET
 		path /api/users/current/statusbar/today
+	}
+	@submit {
+		method POST
+		path /submit
+	}
+
+	handle @submit {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy collector:8000
 	}
 
 	handle @send {

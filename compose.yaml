@@ -2,12 +2,13 @@
 #
 #   candidate's browser --> edge --> editor --> egress --> internet (allowed sites only)
 #                          (consent)    |
-#                                       +--> ingest --> wakapi (activity events)
-#                                            (may only send events)
+#                                       +--> ingest --> wakapi     (activity events)
+#                                            (may only  collector  (submitted changes)
+#                                             send)
 #
-# The editor sits on the "sandbox" network, which has no route to the internet and does not
-# include Wakapi. The only things on both networks are edge (the front door), egress (the
-# outbound proxy) and ingest (the one narrow door to Wakapi).
+# The editor sits on the "sandbox" network, which has no route to the internet and includes
+# neither Wakapi nor the collector. The only things on both networks are edge (the front door),
+# egress (the outbound proxy) and ingest (the one narrow door for the session's record).
 
 x-repo-url: &repo-url ${REPO_URL:-https://github.com/fastapi/full-stack-fastapi-template}
 
@@ -55,15 +56,36 @@ services:
       - monitor:/shared
     restart: "no"
 
-  # The only door from the editor to Wakapi. It lets the editor send its own activity events and
-  # read its own coding-time counter, and refuses everything else (ingest.Caddyfile).
+  # The only door from the editor to Wakapi and the collector. It lets the editor send its own
+  # activity events, read its own coding-time counter and hand in its changes, and refuses
+  # everything else (ingest.Caddyfile).
   ingest:
     image: caddy:2.11.9-alpine
     depends_on:
       - wakapi
+      - collector
     networks: [default, sandbox]
     volumes:
       - ./ingest.Caddyfile:/etc/caddy/Caddyfile:ro
+
+  # Keeps what `submit` sends: one file per submission, never overwritten (collector.py).
+  # The session is decided by the key that comes with it.
+  collector:
+    image: python@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e  # Python 3.13, Alpine
+    command: ["python3", "-I", "/collector.py"]
+    depends_on:
+      wakapi-setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./collector.py:/collector.py:ro
+      - submissions:/submissions
+      # The session keys, to know which session is submitting. Not the dashboard logins.
+      - type: volume
+        source: monitor
+        target: /keys
+        read_only: true
+        volume:
+          subpath: sessions
 
   # The editor's only way out. Lets through the sites a project needs (egress-allowlist.txt)
   # and the host the project is cloned from, and nothing else.
@@ -143,3 +165,4 @@ volumes:
   wakapi-config:
   monitor:
   consent-log:
+  submissions:

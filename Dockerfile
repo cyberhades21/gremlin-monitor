@@ -49,8 +49,10 @@ RUN uv python install 3.14 \
  && ln -s python3.14 /home/coder/.local/bin/python
 ENV PATH="/home/coder/.local/bin:${PATH}"
 
-# Last, so that editing the settings does not reinstall the extensions.
+# Last, so that editing the settings or `submit` does not reinstall the extensions.
 COPY --chown=coder:coder settings.json /home/coder/.local/share/code-server/User/settings.json
+# The `submit` command: saves the candidate's changes and flushes the activity record.
+COPY --chmod=0755 submit.sh /usr/local/bin/submit
 
 WORKDIR /home/coder/workspace
 ENTRYPOINT ["/usr/local/bin/gremlin-entrypoint"]

@@ -9,5 +9,8 @@ build/
 # Local settings, which may hold the editor password.
 .env
 
+# Sample logs and submissions pulled out of test sessions.
+logs/
+
 # Pilot session data is personal data and never belongs in git.
 pilot/

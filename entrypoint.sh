@@ -15,6 +15,13 @@ else
   echo "Workspace already has files, so nothing is cloned."
 fi
 
+# The commit the project started from, so that `submit` can save everything changed since.
+START_FILE="$HOME/.gremlin/start-commit"
+if [ ! -s "$START_FILE" ]; then
+  mkdir -p "$HOME/.gremlin"
+  git -C "$WORKSPACE" rev-parse HEAD > "$START_FILE" || echo "No starting commit; submit will not work." >&2
+fi
+
 # Commits need an author. These are placeholders the candidate can change.
 git config --global user.name "${GIT_USER_NAME:-Candidate}"
 git config --global user.email "${GIT_USER_EMAIL:-candidate@example.invalid}"

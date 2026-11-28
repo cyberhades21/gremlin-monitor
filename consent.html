@@ -8,11 +8,11 @@
   <!--
     TODO(legal): this is the first version of the text. The company running the interview, and a
     lawyer, need to approve it before real candidates see it, and to fill in how long the record
-    is kept and who else can see it. Raise the version in the form below (v=1) whenever the
-    wording changes, so the consent log shows which text each candidate accepted.
+    is kept and who else can see it. Raise the version in the form below and in the footer
+    whenever the wording changes, so the consent log shows which text each candidate accepted.
 
     It must match what the editor really records. If you change what is recorded (see the
-    "Activity monitoring" section of README.md), change this text too.
+    "Activity monitoring" and "Submitting" sections of README.md), change this text too.
 
     No outside fonts, scripts or images, on purpose: this page must not make the candidate's
     browser contact anyone else.
@@ -60,13 +60,25 @@
       <li>How many lines you type yourself.</li>
       <li>The programming language, the project and branch you are working on, and the time of each event.</li>
       <li>The names of the libraries a file imports. These are sent with each event but not kept.</li>
+      <li>
+        <strong>When you submit, the changes you made to the project are saved</strong>, including
+        the contents of files you added or edited. The interviewer can also save them at the end of
+        the session.
+      </li>
     </ul>
 
     <h2>What is not recorded</h2>
     <p>
-      Your screen, your keystrokes, what you type in the terminal, what you search for, and the
-      contents of your files are not part of this activity record. The files you create and change
-      here do stay in this environment, and the people running the interview can see them.
+      Your screen, your keystrokes, what you type in the terminal and what you search for are not
+      part of this record. Apart from the changes saved when you submit, the contents of your files
+      are not either. The files you create and change here stay in this environment, and the people
+      running the interview can see them.
+    </p>
+
+    <h2>When you finish</h2>
+    <p>
+      Open the terminal in the editor, type <code>submit</code> and press Enter. Wait until it says
+      it is done before you close the window.
     </p>
 
     <h2>The internet</h2>
@@ -88,7 +100,7 @@
       you continue.
     </p>
 
-    <form method="post" action="/_consent/accept?session={{env "SESSION_ID"}}&amp;v=1">
+    <form method="post" action="/_consent/accept?session={{env "SESSION_ID"}}&amp;v=2">
       <label>
         <input type="checkbox" name="agree" value="yes" required>
         <span>I have read this and agree to my activity being recorded as described.</span>
@@ -96,7 +108,7 @@
       <button type="submit">Start</button>
     </form>
 
-    <small>Session {{env "SESSION_ID"}} &middot; version 1</small>
+    <small>Session {{env "SESSION_ID"}} &middot; version 2</small>
   </main>
 </body>
 </html>
