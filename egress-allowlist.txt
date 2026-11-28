@@ -1,0 +1,16 @@
+# Sites the editor may reach. One domain per line; a leading dot also covers its subdomains.
+# The host the project is cloned from (REPO_URL) is added automatically.
+# Everything else is blocked. Edit this and run `docker compose up -d egress` to apply.
+
+# GitHub: cloning, and files that projects and package managers fetch from it
+.github.com
+.githubusercontent.com
+
+# Python packages (pip, uv)
+.pypi.org
+.pythonhosted.org
+
+# JavaScript packages (npm, bun, yarn)
+.npmjs.org
+.npmjs.com
+.yarnpkg.com

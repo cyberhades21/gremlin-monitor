@@ -1,0 +1,57 @@
+# The front door, and the only thing that publishes a port. A candidate sees the consent page
+# first; once they accept, everything else goes to the editor. Each acceptance is written to
+# /var/log/gremlin/consent.log with the time, the session name and the consent version.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	# Log only the acceptance, nothing else the candidate does.
+	log {
+		output file /var/log/gremlin/consent.log
+		format json
+	}
+	@notAccept expression `!(method('POST') && path('/_consent/accept'))`
+	log_skip @notAccept
+
+	@accepted header_regexp accepted Cookie (^|;\s*)gremlin_consent=1(;|$)
+
+	@accept {
+		method POST
+		path /_consent/accept
+	}
+	handle @accept {
+		# A session cookie: asked again if the browser is closed and reopened.
+		header Set-Cookie "gremlin_consent=1; Path=/; HttpOnly; SameSite=Lax"
+		# The `*` matters: without it Caddy reads the first word as a path to match, not a target.
+		redir * / 303
+	}
+
+	handle /_consent {
+		header Cache-Control "no-store"
+		root * /srv
+		rewrite * /consent.html
+		templates
+		file_server
+	}
+
+	handle @accepted {
+		reverse_proxy editor:8080
+	}
+
+	# Anyone who has not accepted yet.
+	handle {
+		redir * /_consent 302
+	}
+
+	# The editor needs a few seconds to clone the project and start. Until then, say so and retry.
+	handle_errors {
+		@starting expression `{http.error.status_code} in [502, 503, 504]`
+		handle @starting {
+			header Content-Type "text/html; charset=utf-8"
+			header Refresh "3"
+			respond `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Starting</title><p style="font:16px/1.5 system-ui,sans-serif;max-width:30rem;margin:4rem auto;padding:0 1rem">The editor is still starting. This page refreshes by itself.</p>` 503
+		}
+	}
+}

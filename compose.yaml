@@ -1,28 +1,87 @@
+# How the pieces are wired:
+#
+#   candidate's browser --> edge --> editor --> egress --> internet (allowed sites only)
+#                          (consent)    |
+#                                       +--> ingest --> wakapi (activity events)
+#                                            (may only send events)
+#
+# The editor sits on the "sandbox" network, which has no route to the internet and does not
+# include Wakapi. The only things on both networks are edge (the front door), egress (the
+# outbound proxy) and ingest (the one narrow door to Wakapi).
+
+x-repo-url: &repo-url ${REPO_URL:-https://github.com/fastapi/full-stack-fastapi-template}
+
 services:
+  # Runs once: makes a random password salt for Wakapi and keeps it in a volume.
+  # (Wakapi has no shell, so it cannot make its own.)
+  wakapi-init:
+    image: curlimages/curl:8.11.1
+    user: root  # the volume is owned by root
+    network_mode: none
+    entrypoint: ["sh", "/init.sh"]
+    volumes:
+      - ./wakapi-init.sh:/init.sh:ro
+      - wakapi-config:/config
+    restart: "no"
+
   # Receives the editor's activity events (file, line and save) and keeps them for the report.
   wakapi:
     image: ghcr.io/muety/wakapi:2.18.2
     init: true
-    environment:
-      # Must stay the same between runs. Set your own in .env; this default is only for local use.
-      WAKAPI_PASSWORD_SALT: ${WAKAPI_PASSWORD_SALT:-local-dev-salt-change-me}
+    command: ["-config", "/config/wakapi.yml"]
+    depends_on:
+      wakapi-init:
+        condition: service_completed_successfully
     volumes:
       - wakapi-data:/data
+      - wakapi-config:/config:ro
+    # Not on the sandbox network: the editor cannot reach Wakapi's dashboard, sign-up or settings.
     ports:
       - "127.0.0.1:${WAKAPI_PORT:-3001}:3000"
 
-  # Runs once: waits for Wakapi, makes its user and saves the API key in the shared volume.
+  # Runs once per session: waits for Wakapi, makes that session's own Wakapi user and saves its
+  # API key where only that session's editor can read it.
   # (The Wakapi image has no shell, so it cannot have a healthcheck of its own.)
   wakapi-setup:
     image: curlimages/curl:8.11.1
     user: root  # the shared volume is owned by root
     entrypoint: ["sh", "/setup.sh"]
+    environment:
+      SESSION_ID: ${SESSION_ID:-editor}
     depends_on:
       - wakapi
     volumes:
       - ./wakapi-setup.sh:/setup.sh:ro
       - monitor:/shared
     restart: "no"
+
+  # The only door from the editor to Wakapi. It lets the editor send its own activity events and
+  # read its own coding-time counter, and refuses everything else (ingest.Caddyfile).
+  ingest:
+    image: caddy:2.11.9-alpine
+    depends_on:
+      - wakapi
+    networks: [default, sandbox]
+    volumes:
+      - ./ingest.Caddyfile:/etc/caddy/Caddyfile:ro
+
+  # The editor's only way out. Lets through the sites a project needs (egress-allowlist.txt)
+  # and the host the project is cloned from, and nothing else.
+  egress:
+    image: ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029  # Squid 6.13
+    entrypoint: ["sh", "/egress-entrypoint.sh"]
+    environment:
+      REPO_URL: *repo-url
+    volumes:
+      - ./egress-entrypoint.sh:/egress-entrypoint.sh:ro
+      - ./egress-allowlist.txt:/etc/squid/egress-allowlist.txt:ro
+      - ./squid.conf:/etc/squid/squid.conf:ro
+    networks: [default, sandbox]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/3128'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   editor:
     build: .
@@ -32,17 +91,55 @@ services:
     depends_on:
       wakapi-setup:
         condition: service_completed_successfully
+      egress:
+        condition: service_healthy
+      ingest:
+        condition: service_started
+    networks: [sandbox]  # no route to the internet; see the diagram at the top
+    environment:
+      REPO_URL: *repo-url
+      REPO_REF: ${REPO_REF:-}
+      PASSWORD: ${PASSWORD:-}
+      WAKAPI_URL: http://ingest:3000/api
+      # The way out is through the proxy. The activity door (ingest) is reached directly.
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      http_proxy: http://egress:3128
+      https_proxy: http://egress:3128
+      NO_PROXY: ingest,localhost,127.0.0.1
+      no_proxy: ingest,localhost,127.0.0.1
+    volumes:
+      # Only this session's own folder of the shared volume, so one session's editor can never
+      # see another's key (or the dashboard logins, which live outside it).
+      - type: volume
+        source: monitor
+        target: /shared
+        read_only: true
+        volume:
+          subpath: sessions/${SESSION_ID:-editor}
+
+  # The front door: shows the consent page, then passes the candidate on to the editor.
+  edge:
+    image: caddy:2.11.9-alpine
+    depends_on:
+      - editor
+    networks: [default, sandbox]
+    environment:
+      SESSION_ID: ${SESSION_ID:-editor}
     ports:
       # Loopback only. Change the left side when the link must reach another machine.
       - "127.0.0.1:${PORT:-8181}:8080"
-    environment:
-      REPO_URL: ${REPO_URL:-https://github.com/fastapi/full-stack-fastapi-template}
-      REPO_REF: ${REPO_REF:-}
-      PASSWORD: ${PASSWORD:-}
-      WAKAPI_URL: http://wakapi:3000/api
     volumes:
-      - monitor:/shared:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./consent.html:/srv/consent.html:ro
+      - consent-log:/var/log/gremlin
+
+networks:
+  sandbox:
+    internal: true
 
 volumes:
   wakapi-data:
+  wakapi-config:
   monitor:
+  consent-log:

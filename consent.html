@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Before you start</title>
+  <!--
+    TODO(legal): this is the first version of the text. The company running the interview, and a
+    lawyer, need to approve it before real candidates see it, and to fill in how long the record
+    is kept and who else can see it. Raise the version in the form below (v=1) whenever the
+    wording changes, so the consent log shows which text each candidate accepted.
+
+    It must match what the editor really records. If you change what is recorded (see the
+    "Activity monitoring" section of README.md), change this text too.
+
+    No outside fonts, scripts or images, on purpose: this page must not make the candidate's
+    browser contact anyone else.
+  -->
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0; padding: 32px 20px 56px;
+      font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    main { max-width: 38rem; margin: 0 auto; }
+    h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .75rem; }
+    h2 { font-size: 1.05rem; margin: 1.75rem 0 .4rem; }
+    p, ul { margin: .4rem 0; }
+    ul { padding-left: 1.25rem; }
+    li { margin: .25rem 0; }
+    form {
+      margin-top: 2rem; padding: 1.25rem;
+      border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 10px;
+    }
+    label { display: flex; gap: .75rem; align-items: flex-start; cursor: pointer; }
+    input[type=checkbox] { width: 1.25rem; height: 1.25rem; margin-top: .15rem; flex: none; }
+    button {
+      margin-top: 1.1rem; padding: .7rem 1.6rem; font: inherit; font-weight: 600;
+      color: #fff; background: #1d4ed8; border: 0; border-radius: 8px; cursor: pointer;
+    }
+    button:hover { background: #1e40af; }
+    small { display: block; margin-top: 1.5rem; opacity: .65; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Before you start</h1>
+    <p>
+      You are about to work on a software project in an online code editor, as part of an
+      interview. While you work, your activity here is recorded and shared with the interviewer.
+      Please read what that means.
+    </p>
+
+    <h2>What is recorded</h2>
+    <ul>
+      <li>Which file you have open, and which line your cursor is on.</li>
+      <li>When you save a file, and how many lines it has.</li>
+      <li>How many lines you type yourself.</li>
+      <li>The programming language, the project and branch you are working on, and the time of each event.</li>
+      <li>The names of the libraries a file imports. These are sent with each event but not kept.</li>
+    </ul>
+
+    <h2>What is not recorded</h2>
+    <p>
+      Your screen, your keystrokes, what you type in the terminal, what you search for, and the
+      contents of your files are not part of this activity record. The files you create and change
+      here do stay in this environment, and the people running the interview can see them.
+    </p>
+
+    <h2>The internet</h2>
+    <p>
+      This environment can only reach the sites needed to download the project and its packages.
+      Other sites are blocked from here.
+    </p>
+
+    <h2>Who sees it</h2>
+    <p>
+      The interviewer receives a report built from this record. How long it is kept, and who else
+      can see it, is set by the company running this interview. Ask them if you want to know
+      before you continue.
+    </p>
+
+    <h2>Your choice</h2>
+    <p>
+      If you do not agree, close this page and tell the interviewer. Nothing is recorded until
+      you continue.
+    </p>
+
+    <form method="post" action="/_consent/accept?session={{env "SESSION_ID"}}&amp;v=1">
+      <label>
+        <input type="checkbox" name="agree" value="yes" required>
+        <span>I have read this and agree to my activity being recorded as described.</span>
+      </label>
+      <button type="submit">Start</button>
+    </form>
+
+    <small>Session {{env "SESSION_ID"}} &middot; version 1</small>
+  </main>
+</body>
+</html>
