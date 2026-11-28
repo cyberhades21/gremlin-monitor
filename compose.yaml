@@ -117,7 +117,19 @@ services:
         condition: service_healthy
       ingest:
         condition: service_started
+      # Only started for projects that need them (COMPOSE_PROFILES).
+      db:
+        condition: service_healthy
+        required: false
+      mongo:
+        condition: service_healthy
+        required: false
     networks: [sandbox]  # no route to the internet; see the diagram at the top
+    # Settings a project needs, such as the address of its database. The interviewer app writes
+    # this file per session; without it, nothing extra is set.
+    env_file:
+      - path: ${SESSION_ENV_FILE:-./no-session.env}
+        required: false
     environment:
       REPO_URL: *repo-url
       REPO_REF: ${REPO_REF:-}
@@ -128,8 +140,10 @@ services:
       HTTPS_PROXY: http://egress:3128
       http_proxy: http://egress:3128
       https_proxy: http://egress:3128
-      NO_PROXY: ingest,localhost,127.0.0.1
-      no_proxy: ingest,localhost,127.0.0.1
+      NO_PROXY: ingest,localhost,127.0.0.1,db,mongo
+      no_proxy: ingest,localhost,127.0.0.1,db,mongo
+      # Java ignores the variables above, including the Maven wrapper's own download.
+      JAVA_TOOL_OPTIONS: "-Dhttp.proxyHost=egress -Dhttp.proxyPort=3128 -Dhttps.proxyHost=egress -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1|ingest|db|mongo"
     volumes:
       # Only this session's own folder of the shared volume, so one session's editor can never
       # see another's key (or the dashboard logins, which live outside it).
@@ -139,6 +153,31 @@ services:
         read_only: true
         volume:
           subpath: sessions/${SESSION_ID:-editor}
+
+  # Databases that some sample projects need. They sit on the sandbox network only, so the editor
+  # can use them and nothing outside can. The password is the one the FastAPI template expects.
+  db:
+    image: postgres:18
+    profiles: [postgres]
+    environment:
+      POSTGRES_PASSWORD: changethis
+      POSTGRES_DB: app
+    networks: [sandbox]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "app"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  mongo:
+    image: mongo:8
+    profiles: [mongodb]
+    networks: [sandbox]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
 
   # The front door: shows the consent page, then passes the candidate on to the editor.
   edge:

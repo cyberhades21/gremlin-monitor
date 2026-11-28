@@ -1,9 +1,44 @@
 # gremlin-monitor
 
-A browser VS Code (code-server) in a container, loaded with a repo. First slice of the interview
-sandbox: give the candidate the link and password.
+A browser VS Code (code-server) in a container, loaded with a repo, with a console for the interviewer:
+pick a project, get a link for the candidate, and read back what they did.
 
-## Run
+## Interviewer console
+
+```
+docker compose build            # once, and again after changing the editor image
+python interviewer/app.py       # Python 3.11 or newer on this computer; nothing to install
+```
+
+Open http://localhost:8400 and sign in with the password printed on the first start
+(`python interviewer/app.py --new-password` makes a new one). Use `localhost`, not `127.0.0.1`: browsers keep
+cookies per host name, so this keeps your sign-in away from the editors, which candidates control.
+
+- **New session:** pick a project, give it a label, and wait until it says Ready (a few minutes the first
+  time, while the project's packages install). The page shows the link and editor password to send.
+- **A session** shows consent, the activity timeline and the submitted changes. **End session** takes a final
+  `submit`, copies the record to this computer and stops the containers. **Delete** removes everything.
+- Each session is its own copy of `compose.yaml` (project name `gremlin-<session>`), so sessions share
+  nothing but the editor image. Records are kept in `interviewer/data/`, which is not in git.
+- **Links work only on this computer** (`127.0.0.1`). Reaching a candidate elsewhere needs HTTPS and a host,
+  which is not built.
+
+### Projects
+
+The catalogue is `interviewer/catalog.json`. Each project has a repository, the commit every candidate gets
+(`ref`), a `difficulty` (easy, medium, hard, extra-hard or uncategorized), and optionally databases
+(`services`: `postgres`, `mongodb`), settings for the editor (`env`) and a preparation command (`setup`).
+
+| Project | Needs | Tests run in a fresh session |
+|---|---|---|
+| Full Stack FastAPI Template | PostgreSQL | 58 passed |
+| Spring PetClinic REST | nothing (in-memory database) | 321 passed (`./mvnw test`) |
+| Node Express Boilerplate | MongoDB | 113 passed (`yarn test`) |
+
+To add a project, add an entry. A repository on another host is allowed through the proxy automatically; a
+package registry that is not in `egress-allowlist.txt` has to be added there.
+
+## Run one session by hand
 
 ```
 docker compose up --build
@@ -46,9 +81,10 @@ also wipes the submissions and the Wakapi data.
 
 ## What is inside
 
-code-server 4.145.2, git, ripgrep, Python 3.14 (via uv), uv, bun. Telemetry, update checks and the AI
-chat panel are off. Packages install (pip, uv, npm, bun) through the outbound proxy. The template's backend
-tests also need Postgres, which this image does not have yet.
+code-server 4.145.2, git, ripgrep, Python 3.14 (via uv), uv, bun, Java 21, Maven 3.9, Node 22, npm and yarn.
+Telemetry, update checks and the AI chat panel are off. Packages install (pip, uv, npm, yarn, bun, Maven)
+through the outbound proxy; Java gets it through `JAVA_TOOL_OPTIONS` and `~/.m2/settings.xml`, so Java
+programs print "Picked up JAVA_TOOL_OPTIONS". Databases are started per session, only for projects that ask.
 
 Extensions common to every repo are listed in `extensions.txt` (one `publisher.name@version` per line,
 from Open VSX, which is the only marketplace code-server uses). Edit the file and run
@@ -174,7 +210,8 @@ docker compose exec edge cat /var/log/gremlin/consent.log
 ## Outside traffic
 
 The editor has no route to the internet: it sits on a Docker network marked `internal`. Its only way out is
-the `egress` proxy (Squid), which lets through the sites in `egress-allowlist.txt` (GitHub, PyPI, npm and Yarn)
+the `egress` proxy (Squid), which lets through the sites in `egress-allowlist.txt` (GitHub, PyPI, npm, Yarn and
+Maven Central)
 plus the host the repo is cloned from, and refuses everything else. The proxy keeps no record of what it is
 asked for. Edit the list and run `docker compose up -d egress` to apply it.
 

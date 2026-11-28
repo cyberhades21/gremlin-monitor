@@ -14,3 +14,7 @@
 .npmjs.org
 .npmjs.com
 .yarnpkg.com
+
+# Java packages (Maven Central, including the Maven wrapper's own download)
+.maven.apache.org
+.maven.org

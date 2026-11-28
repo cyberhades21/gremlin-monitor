@@ -8,6 +8,20 @@ USER root
 COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /usr/local/bin/
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s bun /usr/local/bin/bunx
+# Java and Maven (Spring projects), Node, npm and yarn (Node projects), from the official images.
+COPY --from=eclipse-temurin:21-jdk /opt/java/openjdk /opt/java/openjdk
+COPY --from=maven:3.9-eclipse-temurin-21 /usr/share/maven /usr/share/maven
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="/opt/java/openjdk/bin:${PATH}"
+# The Java links matter: a login shell resets PATH, and would not find /opt/java/openjdk/bin.
+RUN ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
+ && ln -s /opt/java/openjdk/bin/java /opt/java/openjdk/bin/javac /opt/java/openjdk/bin/jar /opt/java/openjdk/bin/jshell /usr/local/bin/ \
+ && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && npm install -g yarn@1.22.22 \
+ && java -version && mvn -version && node --version && yarn --version
 # ripgrep: Todo Tree needs it, and `rg` is handy in the terminal. unzip: for the WakaTime download below.
 RUN apt-get update && apt-get install -y --no-install-recommends ripgrep unzip && rm -rf /var/lib/apt/lists/*
 

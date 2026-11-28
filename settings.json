@@ -17,6 +17,8 @@
   "todo-tree.ripgrep.ripgrep": "/usr/bin/rg",
   "basedpyright.analysis.typeCheckingMode": "standard",
   "redhat.telemetry.enabled": false,
+  "java.help.showReleaseNotes": false,
+  "java.configuration.updateBuildConfiguration": "automatic",
   "security.workspace.trust.enabled": false,
   "files.autoSave": "afterDelay",
   "files.autoSaveDelay": 1000

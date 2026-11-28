@@ -18,6 +18,10 @@ wakatime.vscode-wakatime@30.2.1
 esbenp.prettier-vscode@12.4.0
 dbaeumer.vscode-eslint@3.0.34
 
+# Java (Spring projects). redhat.java brings its own Java runtime for the language server.
+redhat.java@1.59.2026112708
+vscjava.vscode-java-debug@0.60.0
+
 # Python. Pylance is Microsoft-only and not on Open VSX, so basedpyright gives the code navigation.
 ms-python.python@2026.10.0
 ms-python.debugpy@2026.6.0

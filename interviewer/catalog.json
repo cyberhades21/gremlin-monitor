@@ -1,0 +1,41 @@
+{
+  "_help": "Sample projects an interviewer can pick. difficulty: easy, medium, hard, extra-hard or uncategorized. ref: the commit every candidate gets. services: databases to start with it (postgres, mongodb). env: settings given to the editor. setup: a shell command run once in the project folder at session start (no single quotes).",
+  "projects": [
+    {
+      "id": "fastapi-template",
+      "name": "Full Stack FastAPI Template",
+      "repo": "https://github.com/fastapi/full-stack-fastapi-template",
+      "ref": "f8c6c147b12bb1c4d3253cc1b06f8b5ef81b10dd",
+      "difficulty": "uncategorized",
+      "stack": ["Python 3.14", "FastAPI", "React", "PostgreSQL"],
+      "description": "A web application template: a FastAPI backend with a React front end.",
+      "services": ["postgres"],
+      "env": { "DATABASE_URL": "postgresql://postgres:changethis@db:5432/app" },
+      "setup": "bun install --frozen-lockfile && (cd frontend && bun run build) && (cd backend && uv sync --frozen && uv run bash scripts/prestart.sh)"
+    },
+    {
+      "id": "petclinic-rest",
+      "name": "Spring PetClinic REST",
+      "repo": "https://github.com/spring-petclinic/spring-petclinic-rest",
+      "ref": "3c1dadd3bcc6a1f2280382244d3681e6a23802a1",
+      "difficulty": "uncategorized",
+      "stack": ["Java 21", "Spring Boot", "Maven", "H2"],
+      "description": "The PetClinic sample as a REST API without a user interface. Uses an in-memory database.",
+      "services": [],
+      "env": {},
+      "setup": "./mvnw -B -q -DskipTests test-compile"
+    },
+    {
+      "id": "express-boilerplate",
+      "name": "Node Express Boilerplate",
+      "repo": "https://github.com/hagopj13/node-express-boilerplate",
+      "ref": "179ae84efec61b14206d0305d941daed6c6d07f9",
+      "difficulty": "uncategorized",
+      "stack": ["Node 22", "Express", "MongoDB", "Jest"],
+      "description": "A starting point for a REST API in Express, with sign-in, users and tests.",
+      "services": ["mongodb"],
+      "env": { "MONGODB_URL": "mongodb://mongo:27017/node-boilerplate" },
+      "setup": "cp -n .env.example .env; yarn install --frozen-lockfile"
+    }
+  ]
+}
